@@ -1,6 +1,4 @@
--- PostGIS + REACH core schema (UUID v4; geography for points)
-CREATE EXTENSION IF NOT EXISTS postgis;
-
+-- REACH core schema (UUID v4; GPS as plain lat/lng — no PostGIS)
 CREATE TABLE organisations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
@@ -47,12 +45,12 @@ CREATE TABLE vehicles (
   vehicle_type TEXT NOT NULL DEFAULT 'ambulance',
   status TEXT NOT NULL DEFAULT 'available',
   is_available BOOLEAN NOT NULL DEFAULT true,
-  location GEOGRAPHY (POINT, 4326),
+  lat DOUBLE PRECISION,
+  lng DOUBLE PRECISION,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_vehicles_corridor ON vehicles (corridor_id);
-CREATE INDEX idx_vehicles_location ON vehicles USING GIST (location);
 
 CREATE TABLE incidents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -60,7 +58,8 @@ CREATE TABLE incidents (
   incident_type TEXT NOT NULL,
   severity TEXT NOT NULL,
   km_marker DOUBLE PRECISION,
-  location GEOGRAPHY (POINT, 4326),
+  lat DOUBLE PRECISION,
+  lng DOUBLE PRECISION,
   trust_score INTEGER NOT NULL DEFAULT 0,
   trust_recommendation TEXT,
   trust_factors JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -76,7 +75,6 @@ CREATE TABLE incidents (
 
 CREATE INDEX idx_incidents_corridor ON incidents (corridor_id);
 CREATE INDEX idx_incidents_created ON incidents (created_at DESC);
-CREATE INDEX idx_incidents_location ON incidents USING GIST (location);
 
 CREATE TABLE incident_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

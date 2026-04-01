@@ -1,4 +1,5 @@
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API =
+  import.meta.env.VITE_API_URL || 'https://reach-dm-production.up.railway.app'
 const PREFIX = '/api'
 
 export function apiUrl(path: string) {
@@ -79,3 +80,4 @@ export async function postJson<T>(path: string, token: string, body: unknown): P
   return r.json()
 }
 
+export { API }

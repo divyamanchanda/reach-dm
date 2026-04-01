@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import './App.css'
-import { apiUrl, fetchJson, login, patchJson, postJson, type User } from './api'
+import { API, apiUrl, fetchJson, login, patchJson, postJson, type User } from './api'
 
 type Corridor = {
   id: string
@@ -104,7 +104,7 @@ function App() {
 
   useEffect(() => {
     if (!token || !corridorId || !vehicleId) return
-    const s = io(import.meta.env.VITE_API_URL || 'http://localhost:8000', {
+    const s = io(API, {
       path: '/socket.io',
       auth: { token },
       transports: ['websocket', 'polling'],
