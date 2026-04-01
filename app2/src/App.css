@@ -1,0 +1,119 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: #450a0a;
+  color: #fef2f2;
+}
+
+.sos {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 1.25rem;
+  min-height: 100vh;
+}
+
+header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.35rem;
+}
+
+.sub {
+  margin: 0 0 1rem;
+  color: #fecaca;
+  font-size: 0.85rem;
+}
+
+.card {
+  background: #7f1d1d;
+  border-radius: 14px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  border: 1px solid #fca5a5;
+}
+
+.confirm h2 {
+  margin-top: 0;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+input,
+select,
+textarea {
+  padding: 0.55rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+  color: #450a0a;
+}
+
+.sos-big {
+  font-size: 1.15rem;
+  font-weight: 800;
+  padding: 1rem;
+  background: #dc2626;
+  color: white;
+  border: none;
+  border-radius: 12px;
+}
+
+.geo {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #fecaca;
+}
+
+.counter {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.counter button {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 8px;
+  border: none;
+  font-size: 1.25rem;
+  background: #fecaca;
+  color: #7f1d1d;
+}
+
+.submit {
+  padding: 0.75rem;
+  border: none;
+  border-radius: 10px;
+  background: #f97316;
+  color: #1c1917;
+  font-weight: 700;
+}
+
+.secondary {
+  padding: 0.6rem;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+  background: transparent;
+  color: #fff;
+}
+
+.err {
+  color: #fecaca;
+  margin: 0;
+}
+
+.legal-note {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  color: #fecaca;
+}

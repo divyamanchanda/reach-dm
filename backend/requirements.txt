@@ -1,0 +1,39 @@
+# =============================================================================
+# REACH backend (Python) — dependency reference
+# =============================================================================
+# Install:  python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+# Runtime:  Python 3.11+ (3.12/3.14 OK; use bcrypt directly — passlib is optional legacy)
+#
+# Layer (from product brief)        | Package(s) below
+# ----------------------------------|------------------------------------------
+# HTTP API                          | fastapi, uvicorn[standard], python-multipart
+# Real-time (Socket.IO, App1)       | python-socketio (AsyncServer + ASGI mount)
+# Database (PostgreSQL + PostGIS) | sqlalchemy, geoalchemy2, psycopg2-binary
+# Migrations (optional)           | alembic
+# Cache (optional; vehicle/incident)| redis
+# Auth (JWT, bcrypt)              | pyjwt, bcrypt
+# Settings / validation           | pydantic, pydantic-settings, email-validator
+# HTTP client (MapmyIndia ETA etc.)| httpx — stub now; wire Distance Matrix later
+# =============================================================================
+
+fastapi>=0.115.0,<1.0.0
+uvicorn[standard]>=0.32.0,<1.0.0
+python-socketio>=5.11.0,<6.0.0
+python-engineio>=4.10.0,<5.0.0
+
+sqlalchemy>=2.0.36,<3.0.0
+geoalchemy2>=0.15.0,<1.0.0
+psycopg2-binary>=2.9.10,<3.0.0
+alembic>=1.14.0,<2.0.0
+
+redis>=5.2.0,<6.0.0
+
+pyjwt[crypto]>=2.10.0,<3.0.0
+bcrypt>=4.2.0,<5.0.0
+
+pydantic>=2.10.0,<3.0.0
+pydantic-settings>=2.6.0,<3.0.0
+email-validator>=2.0.0,<3.0.0
+python-multipart>=0.0.12,<1.0.0
+
+httpx>=0.28.0,<1.0.0

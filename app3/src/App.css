@@ -1,0 +1,80 @@
+.page {
+  min-height: 100vh;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.login,
+.app {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+input,
+select,
+button {
+  margin-top: 0.25rem;
+  width: 100%;
+  padding: 0.6rem;
+  border-radius: 8px;
+  border: 1px solid #475569;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: #2563eb;
+  font-weight: 600;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.danger-btn {
+  background: #dc2626;
+}
+
+.err {
+  color: #fca5a5;
+  margin: 0.4rem 0 0;
+}
+
+.muted {
+  color: #94a3b8;
+}
+
+.stand-down {
+  background: #b91c1c;
+  color: #fff;
+  font-weight: 800;
+  padding: 0.8rem;
+  border-radius: 10px;
+  margin-bottom: 0.75rem;
+}
