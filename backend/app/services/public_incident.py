@@ -14,6 +14,18 @@ from app.services.trust_score import compute_trust_public_sos, count_nearby_repo
 
 SPEED_KMH = 40.0
 
+# Great-circle distance in meters (Earth radius 6371 km); matches prior ST_Distance geography behavior closely enough.
+_HAVERSINE_M = """
+(
+  6371000 * acos(
+    least(1::double precision, greatest(-1::double precision,
+      cos(radians(:ilat)) * cos(radians({tbl}.lat)) * cos(radians({tbl}.lng) - radians(:ilng))
+      + sin(radians(:ilat)) * sin(radians({tbl}.lat))
+    ))
+  )
+)
+"""
+
 
 def _eta_minutes(distance_m: float) -> float:
     if distance_m <= 0:
@@ -55,35 +67,32 @@ def nearest_available_ambulance_eta(db: Session, incident_id: uuid.UUID) -> floa
     row = db.execute(
         text(
             """
-            SELECT ST_X(location::geometry), ST_Y(location::geometry)
-            FROM incidents WHERE id = :id
+            SELECT lng, lat FROM incidents WHERE id = :id
             """
         ),
         {"id": str(incident_id)},
     ).one_or_none()
-    if not row or row[0] is None:
+    if not row or row[0] is None or row[1] is None:
         return None
     lng, lat = float(row[0]), float(row[1])
+    dist_sql = _HAVERSINE_M.format(tbl="v")
     rows = db.execute(
         text(
-            """
+            f"""
             SELECT v.id,
-              ST_X(v.location::geometry) AS lng,
-              ST_Y(v.location::geometry) AS lat,
-              ST_Distance(
-                v.location,
-                ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography,
-                false
-              ) AS dist_m
+              v.lng AS lng,
+              v.lat AS lat,
+              {dist_sql} AS dist_m
             FROM vehicles v
             WHERE v.vehicle_type = 'ambulance'
               AND v.is_available = true
               AND v.status = 'available'
+              AND v.lat IS NOT NULL AND v.lng IS NOT NULL
             ORDER BY dist_m ASC
             LIMIT 1
             """
         ),
-        {"lng": lng, "lat": lat},
+        {"ilng": lng, "ilat": lat},
     ).mappings().all()
     if not rows:
         return None
@@ -109,7 +118,6 @@ def create_public_incident_row(
         is_sms=False,
     )
     public_id = secrets.token_hex(4).upper()
-    loc_sql = "NULL"
     params: dict = {
         "cid": str(corridor_id),
         "itype": body.incident_type,
@@ -125,14 +133,16 @@ def create_public_incident_row(
     }
     tf_json = json.dumps(tr.factors)
     if has_gps:
-        loc_sql = "ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography"
-        params["lng"] = body.longitude
         params["lat"] = body.latitude
+        params["lng"] = body.longitude
+        loc_sql = ":lat, :lng"
+    else:
+        loc_sql = "NULL, NULL"
     row = db.execute(
         text(
             f"""
             INSERT INTO incidents (
-              corridor_id, incident_type, severity, km_marker, location,
+              corridor_id, incident_type, severity, km_marker, lat, lng,
               trust_score, trust_recommendation, trust_factors, status, reporter_type,
               injured_count, notes, photo_url, public_report_id
             ) VALUES (
@@ -173,35 +183,32 @@ def list_nearby_ambulances(db: Session, incident_id: uuid.UUID, limit: int = 20)
     row = db.execute(
         text(
             """
-            SELECT ST_X(location::geometry), ST_Y(location::geometry)
-            FROM incidents WHERE id = :id
+            SELECT lng, lat FROM incidents WHERE id = :id
             """
         ),
         {"id": str(incident_id)},
     ).one_or_none()
-    if not row or row[0] is None:
+    if not row or row[0] is None or row[1] is None:
         return []
     lng, lat = float(row[0]), float(row[1])
+    dist_sql = _HAVERSINE_M.format(tbl="v")
     rows = db.execute(
         text(
-            """
+            f"""
             SELECT v.id, v.label, v.status,
-              ST_X(v.location::geometry) AS lng,
-              ST_Y(v.location::geometry) AS lat,
-              ST_Distance(
-                v.location,
-                ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography,
-                false
-              ) AS dist_m
+              v.lng AS lng,
+              v.lat AS lat,
+              {dist_sql} AS dist_m
             FROM vehicles v
             WHERE v.vehicle_type = 'ambulance'
               AND v.is_available = true
               AND v.status = 'available'
+              AND v.lat IS NOT NULL AND v.lng IS NOT NULL
             ORDER BY dist_m ASC
             LIMIT :lim
             """
         ),
-        {"lng": lng, "lat": lat, "lim": limit},
+        {"ilng": lng, "ilat": lat, "lim": limit},
     ).mappings().all()
     vehicles_for_routing = [{"lng": float(r["lng"]), "lat": float(r["lat"])} for r in rows]
     durations, routed_distances = _fetch_osrm_durations_and_distances(lng, lat, vehicles_for_routing)

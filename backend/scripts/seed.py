@@ -1,5 +1,5 @@
 """
-Load dummy REACH data into PostgreSQL/PostGIS.
+Load dummy REACH data into PostgreSQL.
 Run:  cd backend && python -m scripts.seed
 
 Requires DB from docker-compose (or equivalent) and schema from infra/init-db.sql.
@@ -89,9 +89,8 @@ def clear_and_seed(db: Session) -> None:
         db.execute(
             text(
                 """
-                INSERT INTO vehicles (id, corridor_id, label, vehicle_type, status, is_available, location)
-                VALUES (:id, :cid, :label, 'ambulance', :st, :avail,
-                  ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography)
+                INSERT INTO vehicles (id, corridor_id, label, vehicle_type, status, is_available, lat, lng)
+                VALUES (:id, :cid, :label, 'ambulance', :st, :avail, :lat, :lng)
                 """
             ),
             {
@@ -161,11 +160,10 @@ def clear_and_seed(db: Session) -> None:
             text(
                 """
                 INSERT INTO incidents (
-                  id, corridor_id, incident_type, severity, km_marker, location,
+                  id, corridor_id, incident_type, severity, km_marker, lat, lng,
                   trust_score, trust_recommendation, trust_factors, status, reporter_type, injured_count, public_report_id
                 ) VALUES (
-                  :id, :cid, :itype, :sev, :km,
-                  ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography,
+                  :id, :cid, :itype, :sev, :km, :lat, :lng,
                   :ts, :tr, CAST(:tf AS jsonb), :st, :rep, :inj, :pid
                 )
                 """

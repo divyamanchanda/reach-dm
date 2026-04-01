@@ -8,7 +8,7 @@
 # ----------------------------------|------------------------------------------
 # HTTP API                          | fastapi, uvicorn[standard], python-multipart
 # Real-time (Socket.IO, App1)       | python-socketio (AsyncServer + ASGI mount)
-# Database (PostgreSQL + PostGIS) | sqlalchemy, geoalchemy2, psycopg2-binary
+# Database (PostgreSQL)           | sqlalchemy, psycopg2-binary
 # Migrations (optional)           | alembic
 # Cache (optional; vehicle/incident)| redis
 # Auth (JWT, bcrypt)              | pyjwt, bcrypt
@@ -22,7 +22,6 @@ python-socketio>=5.11.0,<6.0.0
 python-engineio>=4.10.0,<5.0.0
 
 sqlalchemy>=2.0.36,<3.0.0
-geoalchemy2>=0.15.0,<1.0.0
 psycopg2-binary>=2.9.10,<3.0.0
 alembic>=1.14.0,<2.0.0
 

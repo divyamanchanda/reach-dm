@@ -82,12 +82,15 @@ def count_nearby_reports(
             """
             SELECT COUNT(*) FROM incidents
             WHERE corridor_id = :cid
-              AND location IS NOT NULL
-              AND ST_DWithin(
-                location,
-                ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography,
-                :radius
-              )
+              AND lat IS NOT NULL AND lng IS NOT NULL
+              AND (
+                6371000 * acos(
+                  least(1::double precision, greatest(-1::double precision,
+                    cos(radians(:lat)) * cos(radians(lat)) * cos(radians(lng) - radians(:lng))
+                    + sin(radians(:lat)) * sin(radians(lat))
+                  ))
+                )
+              ) <= :radius
             """
         ),
         {"cid": str(corridor_id), "lng": lng, "lat": lat, "radius": radius_m},

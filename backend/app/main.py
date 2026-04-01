@@ -28,11 +28,15 @@ fastapi_app.include_router(vehicles.router, prefix=api)
 
 
 @fastapi_app.on_event("startup")
-def ensure_corridor_coordinate_columns() -> None:
+def ensure_coordinate_columns() -> None:
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS start_lat DOUBLE PRECISION"))
         conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS start_lng DOUBLE PRECISION"))
         conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS end_lat DOUBLE PRECISION"))
         conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS end_lng DOUBLE PRECISION"))
+        conn.execute(text("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION"))
+        conn.execute(text("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION"))
+        conn.execute(text("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION"))
+        conn.execute(text("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION"))
 
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app, socketio_path="socket.io")

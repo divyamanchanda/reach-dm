@@ -7,7 +7,6 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.geo_utils import point_lat_lng_expr
 from app.models import Corridor, Dispatch, Incident, IncidentEvent, Organisation, User, Vehicle
 from app.schemas import (
     AdminCorridorCreateBody,
@@ -252,13 +251,11 @@ def admin_live_map(
     _: User = Depends(admin_user),
 ):
     corridors = db.execute(select(Corridor).order_by(Corridor.name)).scalars().all()
-    lat_i, lng_i = point_lat_lng_expr(Incident.location)
-    lat_v, lng_v = point_lat_lng_expr(Vehicle.location)
     out_corridors: list[LiveMapCorridorOut] = []
 
     for c in corridors:
         qi = (
-            select(Incident, lat_i.label("lat"), lng_i.label("lng"))
+            select(Incident, Incident.lat.label("lat"), Incident.lng.label("lng"))
             .where(Incident.corridor_id == c.id)
             .where(Incident.status.notin_(["closed", "cancelled"]))
         )
@@ -279,7 +276,7 @@ def admin_live_map(
                 )
             )
 
-        qv = select(Vehicle, lat_v.label("lat"), lng_v.label("lng")).where(Vehicle.corridor_id == c.id)
+        qv = select(Vehicle, Vehicle.lat.label("lat"), Vehicle.lng.label("lng")).where(Vehicle.corridor_id == c.id)
         vehicles: list[LiveMapVehicleOut] = []
         for v, la, ln in db.execute(qv).all():
             assign_row = db.execute(

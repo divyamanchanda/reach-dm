@@ -1,7 +1,6 @@
 import uuid
 from datetime import datetime
 
-from geoalchemy2 import Geography
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Float, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -65,7 +64,8 @@ class Vehicle(Base):
     vehicle_type: Mapped[str] = mapped_column(Text, nullable=False, default="ambulance")
     status: Mapped[str] = mapped_column(Text, nullable=False, default="available")
     is_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    location: Mapped[object | None] = mapped_column(Geography(geometry_type="POINT", srid=4326), nullable=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
@@ -77,7 +77,8 @@ class Incident(Base):
     incident_type: Mapped[str] = mapped_column(Text, nullable=False)
     severity: Mapped[str] = mapped_column(Text, nullable=False)
     km_marker: Mapped[float | None] = mapped_column(Float, nullable=True)
-    location: Mapped[object | None] = mapped_column(Geography(geometry_type="POINT", srid=4326), nullable=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     trust_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     trust_recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
     trust_factors: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)

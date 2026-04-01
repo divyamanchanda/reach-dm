@@ -7,7 +7,6 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.geo_utils import point_lat_lng_expr
 from app.models import Corridor, Incident, User, Vehicle
 from app.schemas import CorridorOut, CorridorStatsOut, IncidentListItem, PublicIncidentCreate, PublicIncidentResponse, VehicleMapOut
 from app.security import get_current_user
@@ -80,9 +79,8 @@ def list_incidents(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    lat_e, lng_e = point_lat_lng_expr(Incident.location)
     q = (
-        select(Incident, lat_e.label("lat"), lng_e.label("lng"))
+        select(Incident, Incident.lat.label("lat"), Incident.lng.label("lng"))
         .where(Incident.corridor_id == corridor_id)
         .where(Incident.status.notin_(["closed", "cancelled"]))
     )
@@ -119,8 +117,7 @@ def list_vehicles(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    lat_e, lng_e = point_lat_lng_expr(Vehicle.location)
-    q = select(Vehicle, lat_e.label("lat"), lng_e.label("lng")).where(Vehicle.corridor_id == corridor_id)
+    q = select(Vehicle, Vehicle.lat.label("lat"), Vehicle.lng.label("lng")).where(Vehicle.corridor_id == corridor_id)
     out: list[VehicleMapOut] = []
     for v, lat, lng in db.execute(q).all():
         out.append(

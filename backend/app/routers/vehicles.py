@@ -38,8 +38,7 @@ def patch_vehicle_location(
         text(
             """
             UPDATE vehicles
-            SET location = ST_SetSRID(ST_MakePoint(:lng, :lat), 4326)::geography,
-                updated_at = now()
+            SET lat = :lat, lng = :lng, updated_at = now()
             WHERE id = :id
             """
         ),
