@@ -1,5 +1,6 @@
 const API =
-  import.meta.env.VITE_API_URL || 'https://reach-dm-production.up.railway.app'
+  // Normalize in case VITE_API_URL was set to ".../api" (would otherwise create "/api/api/...").
+  (import.meta.env.VITE_API_URL || 'https://reach-dm-production.up.railway.app').replace(/\/api\/?$/, '')
 const PREFIX = '/api'
 
 export function apiUrl(path: string) {
