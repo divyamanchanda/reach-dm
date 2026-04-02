@@ -180,6 +180,18 @@ function humanizeDispatchFailure(e: unknown): { line: string; hint: string } {
   }
 }
 
+function estimatePointFromKm(km: number): { lat: number; lng: number } {
+  // Matches NH48 Bengaluru -> Chennai interpolation used elsewhere in App4.
+  const bengaluru = { lat: 12.9716, lng: 77.5946 }
+  const chennai = { lat: 13.0827, lng: 80.2707 }
+  const nh48Km = 312
+  const t = Math.min(1, Math.max(0, km / nh48Km))
+  return {
+    lat: bengaluru.lat + (chennai.lat - bengaluru.lat) * t,
+    lng: bengaluru.lng + (chennai.lng - bengaluru.lng) * t,
+  }
+}
+
 function RecenterMap({ latitude, longitude }: { latitude: number; longitude: number }) {
   const map = useMap()
   useEffect(() => {
@@ -636,7 +648,13 @@ function App() {
               {(() => {
                 const lat = incidentDetail?.latitude ?? selected.latitude
                 const lng = incidentDetail?.longitude ?? selected.longitude
-                if (lat == null || lng == null) {
+                const km = selected.km_marker
+                const hasLatLng = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
+                const estimated = !hasLatLng && km != null && Number.isFinite(km) ? estimatePointFromKm(km) : null
+                const finalLat = hasLatLng ? lat : estimated?.lat ?? null
+                const finalLng = hasLatLng ? lng : estimated?.lng ?? null
+
+                if (finalLat == null || finalLng == null) {
                   return (
                     <>
                       <div>Lat —</div>
@@ -648,7 +666,7 @@ function App() {
                   <>
                     <MapContainer
                       className="leaflet-map"
-                      center={[lat, lng]}
+                      center={[finalLat, finalLng]}
                       zoom={13}
                       scrollWheelZoom
                     >
@@ -657,19 +675,19 @@ function App() {
                         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                       />
                       <CircleMarker
-                        center={[lat, lng]}
+                        center={[finalLat, finalLng]}
                         radius={10}
                         pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.7 }}
                       >
                         <Popup>{selected.incident_type}</Popup>
                       </CircleMarker>
-                      <RecenterMap latitude={lat} longitude={lng} />
+                      <RecenterMap latitude={finalLat} longitude={finalLng} />
                     </MapContainer>
-                    <div>Lat {lat}</div>
-                    <div>Lng {lng}</div>
+                    <div>Lat {finalLat}</div>
+                    <div>Lng {finalLng}</div>
                     <a
                       className="link"
-                      href={`https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=14/${lat}/${lng}`}
+                      href={`https://www.openstreetmap.org/?mlat=${finalLat}&mlon=${finalLng}#map=14/${finalLat}/${finalLng}`}
                       target="_blank"
                       rel="noreferrer"
                     >
