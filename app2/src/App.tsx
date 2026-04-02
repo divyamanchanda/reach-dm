@@ -83,7 +83,7 @@ const SEVERITIES = [
 type Phase = 'landing' | 'form' | 'done'
 type LocState = 'pending' | 'ok' | 'fail'
 
-/** Full-width tap targets; native select controls are unreliable on many mobile browsers. */
+/** Full-width tap targets — large label text; selected = red highlight + check (not checkbox UI). */
 function HighwayButtonList({
   corridors,
   selectedId,
@@ -103,24 +103,39 @@ function HighwayButtonList({
     )
   }
   return (
-    <div className="sos-hw-list" role="group" aria-label="Choose highway">
-      {corridors.map((c) => (
-        <button
-          key={c.id}
-          type="button"
-          className={`sos-hw-item ${selectedId === c.id ? 'selected' : ''}`}
-          disabled={disabled}
-          onClick={() => onSelect(c.id)}
-        >
-          <span className="sos-hw-name">{c.name}</span>
-          {selectedId === c.id ? (
-            <span className="sos-hw-check" aria-hidden="true">
-              ✓
-            </span>
-          ) : null}
-        </button>
-      ))}
+    <div className="sos-hw-list" role="radiogroup" aria-label="Choose highway">
+      {corridors.map((c) => {
+        const selected = selectedId === c.id
+        return (
+          <button
+            key={c.id}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            className={`sos-hw-btn ${selected ? 'sos-hw-btn--selected' : ''}`}
+            disabled={disabled}
+            onClick={() => onSelect(c.id)}
+          >
+            <span className="sos-hw-btn-label">{c.name}</span>
+            {selected ? (
+              <span className="sos-hw-btn-check" aria-hidden="true">
+                ✓
+              </span>
+            ) : (
+              <span className="sos-hw-btn-spacer" aria-hidden="true" />
+            )}
+          </button>
+        )
+      })}
     </div>
+  )
+}
+
+function HighwayDetectedLine({ name }: { name: string }) {
+  return (
+    <p className="sos-hw-detected">
+      <span className="sos-hw-detected-prefix">Highway:</span> {name}
+    </p>
   )
 }
 
@@ -207,9 +222,18 @@ export default function App() {
   }, [phase, corridorId, corridors])
 
   const gpsOk = locState === 'ok' && geo != null
+  const soleCorridor = corridors.length === 1 ? corridors[0] : null
+  const soleHighwayResolved =
+    Boolean(soleCorridor && corridorId === soleCorridor.id && !corridorsLoading)
   const needsHighwayWhenGps =
-    phase === 'form' && locState === 'ok' && !corridorFromUrl && !DEFAULT_CORRIDOR && corridors.length > 1 && !corridorId
+    phase === 'form' &&
+    locState === 'ok' &&
+    !corridorFromUrl &&
+    !DEFAULT_CORRIDOR &&
+    corridors.length > 1
   const showManualLocation = phase === 'form' && locState === 'fail'
+  const showMultiHighwayPicker =
+    !corridorsLoading && corridors.length > 1 && (showManualLocation || needsHighwayWhenGps)
 
   const kmNum = kmMarker.trim() === '' ? null : Number(kmMarker.trim())
   const kmValid = kmNum != null && Number.isFinite(kmNum)
@@ -358,12 +382,17 @@ export default function App() {
               </p>
             )}
             {locState === 'ok' && (
-              <p className="loc-ok" role="status">
-                <span className="loc-check" aria-hidden="true">
-                  ✓
-                </span>
-                Location captured
-              </p>
+              <>
+                <p className="loc-ok" role="status">
+                  <span className="loc-check" aria-hidden="true">
+                    ✓
+                  </span>
+                  Location captured
+                </p>
+                {soleHighwayResolved && soleCorridor ? (
+                  <HighwayDetectedLine name={soleCorridor.name} />
+                ) : null}
+              </>
             )}
             {locState === 'fail' && (
               <div className="loc-fallback">
@@ -381,13 +410,20 @@ export default function App() {
                     Reload highway list
                   </button>
                 )}
-                <p className="sos-hw-prompt">Highway — tap the one you are on</p>
-                <HighwayButtonList
-                  corridors={corridors}
-                  selectedId={corridorId}
-                  onSelect={setCorridorId}
-                  disabled={corridorsLoading}
-                />
+                {soleHighwayResolved && soleCorridor ? (
+                  <HighwayDetectedLine name={soleCorridor.name} />
+                ) : null}
+                {showMultiHighwayPicker ? (
+                  <>
+                    <p className="sos-hw-prompt">Highway — tap the one you are on</p>
+                    <HighwayButtonList
+                      corridors={corridors}
+                      selectedId={corridorId}
+                      onSelect={setCorridorId}
+                      disabled={corridorsLoading}
+                    />
+                  </>
+                ) : null}
                 <label className="sos-km-label">
                   What number is on the nearest green milestone stone?
                   <input
@@ -416,13 +452,17 @@ export default function App() {
                     Reload highway list
                   </button>
                 )}
-                <p className="sos-hw-prompt">Which highway are you on? Tap below.</p>
-                <HighwayButtonList
-                  corridors={corridors}
-                  selectedId={corridorId}
-                  onSelect={setCorridorId}
-                  disabled={corridorsLoading}
-                />
+                {showMultiHighwayPicker ? (
+                  <>
+                    <p className="sos-hw-prompt">Which highway are you on? Tap yours below.</p>
+                    <HighwayButtonList
+                      corridors={corridors}
+                      selectedId={corridorId}
+                      onSelect={setCorridorId}
+                      disabled={corridorsLoading}
+                    />
+                  </>
+                ) : null}
               </>
             )}
           </div>
