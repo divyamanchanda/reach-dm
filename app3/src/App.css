@@ -1,80 +1,372 @@
-.page {
-  min-height: 100vh;
-  background: #0f172a;
+/* REACH Driver Console — mobile-first */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.dc-app {
+  min-height: 100dvh;
+  background: linear-gradient(165deg, #0c1222 0%, #0f172a 45%, #0b1020 100%);
   color: #e2e8f0;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-.login,
-.app {
-  max-width: 680px;
+.dc-login {
+  max-width: 22rem;
   margin: 0 auto;
-  padding: 1rem;
+  padding: clamp(1.25rem, 4vw, 2rem);
+  padding-top: clamp(2.5rem, 12vh, 4rem);
 }
 
-.top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 1rem;
+.dc-brand {
+  margin: 0 0 1.5rem;
+  font-size: clamp(1.5rem, 5vw, 1.85rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #f8fafc;
 }
 
-.card {
-  background: #1e293b;
+.dc-card {
+  background: rgba(30, 41, 59, 0.92);
   border: 1px solid #334155;
-  border-radius: 12px;
-  padding: 1rem;
+  border-radius: 14px;
+  padding: 1.15rem;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.dc-field {
+  display: block;
   margin-bottom: 1rem;
 }
 
-label {
+.dc-field span {
   display: block;
-  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  margin-bottom: 0.35rem;
 }
 
-input,
-select,
-button {
-  margin-top: 0.25rem;
+.dc-field input {
   width: 100%;
-  padding: 0.6rem;
-  border-radius: 8px;
+  padding: 0.75rem 0.85rem;
+  border-radius: 10px;
   border: 1px solid #475569;
   background: #0f172a;
+  color: #f1f5f9;
+  font-size: 1rem;
+}
+
+.dc-field input:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+.dc-btn {
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.85rem 1rem;
+  border-radius: 10px;
+  border: none;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+
+.dc-btn:active {
+  transform: scale(0.98);
+}
+
+.dc-btn-primary {
+  background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.45);
+}
+
+.dc-btn-primary:hover {
+  filter: brightness(1.05);
+}
+
+.dc-err {
+  color: #fca5a5;
+  font-size: 0.9rem;
+  margin: 0.5rem 0 0;
+  line-height: 1.4;
+}
+
+/* Top bar */
+
+.dc-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: clamp(0.85rem, 3vw, 1rem) clamp(0.85rem, 3vw, 1.1rem);
+  padding-top: max(0.85rem, env(safe-area-inset-top));
+  background: rgba(15, 23, 42, 0.88);
+  border-bottom: 1px solid #1e293b;
+  backdrop-filter: blur(10px);
+}
+
+.dc-topbar-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.dc-driver-name {
+  margin: 0 0 0.35rem;
+  font-size: clamp(1.05rem, 3.5vw, 1.2rem);
+  font-weight: 800;
+  color: #f8fafc;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.dc-meta {
+  margin: 0.2rem 0 0;
+  font-size: 0.88rem;
+  color: #cbd5e1;
+  line-height: 1.35;
+}
+
+.dc-meta-label {
+  color: #64748b;
+  font-weight: 600;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 0.35rem;
+}
+
+.dc-btn-logout {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 0.45rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid #475569;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dc-btn-logout:hover {
+  background: #1e293b;
   color: #e2e8f0;
 }
 
-button {
-  cursor: pointer;
-  border: none;
-  background: #2563eb;
+/* GPS banner */
+
+.dc-gps-banner {
+  background: #991b1b;
+  color: #fef2f2;
+  text-align: center;
+  font-weight: 800;
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  padding: 0.55rem 0.75rem;
+}
+
+/* Vehicle / session messages */
+
+.dc-banner {
+  margin: 0.75rem clamp(0.85rem, 3vw, 1.1rem);
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.dc-banner-warn {
+  background: rgba(180, 83, 9, 0.25);
+  border: 1px solid #b45309;
+  color: #fdba74;
+}
+
+/* Main content */
+
+.dc-main {
+  padding: clamp(0.75rem, 3vw, 1.1rem);
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+.dc-idle {
+  margin: 2rem 0;
+  text-align: center;
+  font-size: 1.05rem;
+  color: #64748b;
+  font-weight: 500;
+}
+
+/* Incident card */
+
+.dc-incident-card {
+  background: linear-gradient(180deg, rgba(30, 58, 95, 0.55) 0%, rgba(15, 23, 42, 0.9) 100%);
+  border: 1px solid #334155;
+  border-radius: 16px;
+  padding: clamp(1.1rem, 4vw, 1.35rem);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+}
+
+.dc-incident-type {
+  margin: 0 0 0.65rem;
+  font-size: clamp(1.45rem, 6vw, 2rem);
+  font-weight: 800;
+  text-transform: capitalize;
+  line-height: 1.15;
+  color: #f8fafc;
+}
+
+.dc-sev {
+  display: inline-block;
+  margin: 0 0 0.85rem;
+  padding: 0.28rem 0.65rem;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.dc-sev-critical {
+  background: #7f1d1d;
+  color: #fecaca;
+}
+
+.dc-sev-major {
+  background: #9a3412;
+  color: #ffedd5;
+}
+
+.dc-sev-minor {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+.dc-km {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: #cbd5e1;
+}
+
+.dc-km strong {
+  color: #f8fafc;
+  font-size: 1.15rem;
+}
+
+.dc-trust {
+  margin: 0 0 0.65rem;
+  font-size: 0.95rem;
   font-weight: 600;
+  color: #a5b4fc;
 }
 
-.actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-}
-
-.danger-btn {
-  background: #dc2626;
-}
-
-.err {
-  color: #fca5a5;
-  margin: 0.4rem 0 0;
-}
-
-.muted {
+.dc-notes {
+  margin: 0 0 1rem;
+  padding: 0.65rem 0.75rem;
+  background: rgba(15, 23, 42, 0.65);
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.45;
   color: #94a3b8;
 }
 
-.stand-down {
-  background: #b91c1c;
-  color: #fff;
-  font-weight: 800;
-  padding: 0.8rem;
+.dc-actions-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+@media (min-width: 480px) {
+  .dc-actions-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.dc-act {
+  min-height: 3rem;
+  padding: 0.55rem 0.4rem;
   border-radius: 10px;
-  margin-bottom: 0.75rem;
+  border: 1px solid #3b82f6;
+  background: rgba(37, 99, 235, 0.2);
+  color: #bfdbfe;
+  font-size: clamp(0.72rem, 2.8vw, 0.88rem);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.dc-act:hover:not(:disabled) {
+  background: rgba(37, 99, 235, 0.45);
+  color: #fff;
+}
+
+.dc-act:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Hoax full screen */
+
+.dc-hoax-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  padding-top: max(1.25rem, env(safe-area-inset-top));
+  padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
+  background: #7f1d1d;
+  background: radial-gradient(ellipse at 50% 30%, #991b1b 0%, #450a0a 70%);
+}
+
+.dc-hoax-inner {
+  max-width: 24rem;
+  text-align: center;
+}
+
+.dc-hoax-title {
+  margin: 0 0 1rem;
+  font-size: clamp(1.35rem, 6vw, 1.85rem);
+  font-weight: 900;
+  line-height: 1.2;
+  color: #fef2f2;
+  text-shadow: 0 2px 20px rgba(0, 0, 0, 0.35);
+}
+
+.dc-hoax-sub {
+  margin: 0 0 1.5rem;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: #fecaca;
+}
+
+.dc-hoax-dismiss {
+  width: 100%;
+  max-width: 16rem;
+  padding: 0.9rem 1.25rem;
+  border-radius: 12px;
+  border: 2px solid #fef2f2;
+  background: #fef2f2;
+  color: #450a0a;
+  font-size: 1rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dc-hoax-dismiss:active {
+  transform: scale(0.98);
 }

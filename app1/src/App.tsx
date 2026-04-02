@@ -102,8 +102,17 @@ function relativeReportedTime(createdAt: string): string {
   return days === 1 ? '1 day ago' : `${days} days ago`
 }
 
+/** True only if `created_at` is a valid time within the last 5 minutes (not in the future). */
 function isNewIncident(createdAt: string): boolean {
-  return Date.now() - new Date(createdAt).getTime() <= 5 * 60 * 1000
+  const t = new Date(createdAt).getTime()
+  if (Number.isNaN(t)) return false
+  const ageMs = Date.now() - t
+  if (ageMs < 0) return false
+  return ageMs <= 5 * 60 * 1000
+}
+
+function sortIncidentsByCreatedAtDesc(items: Incident[]): Incident[] {
+  return [...items].sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
 }
 
 function statusLabel(status: string): string {
@@ -228,6 +237,14 @@ function App() {
   const [assignedVehicleByIncidentId, setAssignedVehicleByIncidentId] = useState<
     Record<string, AssignedVehicle>
   >({})
+  /** Re-render periodically so NEW badges drop after 5 minutes without a list refresh. */
+  const [_newBadgeTick, setNewBadgeTick] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => setNewBadgeTick((n) => n + 1), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const sortedIncidents = useMemo(() => sortIncidentsByCreatedAtDesc(incidents), [incidents])
 
   const selected = useMemo(
     () => incidents.find((i) => i.id === selectedId) ?? null,
@@ -542,7 +559,7 @@ function App() {
       <div className="layout">
         <aside className="list">
           <h3>Live incidents</h3>
-          {incidents.map((i) => (
+          {sortedIncidents.map((i) => (
             <div
               key={i.id}
               role="button"

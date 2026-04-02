@@ -215,6 +215,12 @@ def clear_and_seed(db: Session) -> None:
         {"iid": str(iids[3]), "vid": str(vids[0][0])},
     )
 
+    # App3 driver (+919876543211) is assigned to AMB-03, which has an open dispatched incident
+    db.execute(
+        text("UPDATE vehicles SET driver_user_id = :uid WHERE id = :vid"),
+        {"uid": str(driver_id), "vid": str(vids[2][0])},
+    )
+
     db.commit()
     print("Seed complete.")
     print("Corridor ID (use in App2 QR / env):", corridor_id)

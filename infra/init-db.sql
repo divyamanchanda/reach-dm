@@ -41,6 +41,7 @@ CREATE TABLE users (
 CREATE TABLE vehicles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   corridor_id UUID NOT NULL REFERENCES corridors (id),
+  driver_user_id UUID REFERENCES users (id) ON DELETE SET NULL,
   label TEXT NOT NULL,
   vehicle_type TEXT NOT NULL DEFAULT 'ambulance',
   status TEXT NOT NULL DEFAULT 'available',

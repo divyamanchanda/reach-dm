@@ -45,5 +45,11 @@ def ensure_coordinate_columns() -> None:
         conn.execute(text("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION"))
         conn.execute(text("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION"))
         conn.execute(text("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION"))
+        conn.execute(
+            text(
+                "ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS driver_user_id UUID REFERENCES users(id) ON DELETE SET NULL"
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_vehicles_driver_user ON vehicles (driver_user_id)"))
 
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app, socketio_path="socket.io")

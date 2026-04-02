@@ -185,15 +185,59 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
+const NH48_KM_LENGTH = 312
+
 function estimatePointFromKm(km: number): LatLng {
   const bengaluru = { lat: 12.9716, lng: 77.5946 }
   const chennai = { lat: 13.0827, lng: 80.2707 }
-  const nh48Km = 312
-  const t = Math.min(1, Math.max(0, km / nh48Km))
+  const t = Math.min(1, Math.max(0, km / NH48_KM_LENGTH))
   return {
     lat: bengaluru.lat + (chennai.lat - bengaluru.lat) * t,
     lng: bengaluru.lng + (chennai.lng - bengaluru.lng) * t,
   }
+}
+
+/** Approximate KM along NH48 from coordinates (planar projection onto Bengaluru–Chennai segment). */
+function kmAlongNh48FromLatLng(lat: number, lng: number): number {
+  const b = { lat: 12.9716, lng: 77.5946 }
+  const c = { lat: 13.0827, lng: 80.2707 }
+  const dx = c.lng - b.lng
+  const dy = c.lat - b.lat
+  const len2 = dx * dx + dy * dy
+  if (len2 <= 0) return 0
+  const t = Math.max(0, Math.min(1, ((lng - b.lng) * dx + (lat - b.lat) * dy) / len2))
+  return t * NH48_KM_LENGTH
+}
+
+const NH48_DIAGRAM_CITIES: { km: number; label: string }[] = [
+  { km: 0, label: 'Bengaluru' },
+  { km: 45, label: 'Hosur' },
+  { km: 90, label: 'Krishnagiri' },
+  { km: 200, label: 'Vellore' },
+  { km: NH48_KM_LENGTH, label: 'Chennai' },
+]
+
+function roadXYDiagram(km: number): { x: number; y: number } {
+  const t = Math.max(0, Math.min(1, km / NH48_KM_LENGTH))
+  const x = 55 + t * 890
+  const y = 195 + 50 * Math.sin(t * Math.PI)
+  return { x, y }
+}
+
+function roadPathDiagramD(): string {
+  const steps = 56
+  const parts: string[] = []
+  for (let i = 0; i <= steps; i++) {
+    const { x, y } = roadXYDiagram((i / steps) * NH48_KM_LENGTH)
+    parts.push(i === 0 ? `M ${x.toFixed(1)} ${y.toFixed(1)}` : `L ${x.toFixed(1)} ${y.toFixed(1)}`)
+  }
+  return parts.join(' ')
+}
+
+function jitterId(id: string, range: number): number {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h + id.charCodeAt(i) * (i + 1)) % 1009
+  return ((h % (range * 2 + 1)) - range) * 0.6
 }
 
 function incidentLatLng(inc: LiveMapIncident): LatLng | null {
@@ -214,6 +258,24 @@ function vehicleLatLng(v: LiveMapVehicle): LatLng | null {
     return estimatePointFromKm(v.km_marker)
   }
   return null
+}
+
+function kmForLiveIncident(inc: LiveMapIncident): number | null {
+  if (inc.km_marker != null && Number.isFinite(inc.km_marker)) {
+    return Math.max(0, Math.min(NH48_KM_LENGTH, inc.km_marker))
+  }
+  const ll = incidentLatLng(inc)
+  if (!ll) return null
+  return kmAlongNh48FromLatLng(ll.lat, ll.lng)
+}
+
+function kmForLiveVehicle(v: LiveMapVehicle): number | null {
+  if (v.km_marker != null && Number.isFinite(v.km_marker)) {
+    return Math.max(0, Math.min(NH48_KM_LENGTH, v.km_marker))
+  }
+  const ll = vehicleLatLng(v)
+  if (!ll) return null
+  return kmAlongNh48FromLatLng(ll.lat, ll.lng)
 }
 
 function isLikelyHighwayHit(row: NominatimRow): boolean {
@@ -513,6 +575,174 @@ function CorridorRouteMap({
 
   if (!leafletReady) return <div className="leaflet-box corridor-route-map map-loading">Loading map engine...</div>
   return <div className="leaflet-box corridor-route-map" ref={hostRef} />
+}
+
+function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
+  const incidentsPlaced = useMemo(() => {
+    const out: { key: string; inc: LiveMapIncident; km: number; x: number; y: number }[] = []
+    for (const c of corridors) {
+      for (const inc of c.incidents) {
+        const km = kmForLiveIncident(inc)
+        if (km == null) continue
+        const p = roadXYDiagram(km)
+        const jy = jitterId(inc.id, 16)
+        const jx = jitterId(`${inc.id}x`, 10)
+        out.push({
+          key: `${c.id}-${inc.id}`,
+          inc,
+          km,
+          x: p.x + jx,
+          y: p.y + jy - 18,
+        })
+      }
+    }
+    return out
+  }, [corridors])
+
+  const vehiclesPlaced = useMemo(() => {
+    const out: { key: string; v: LiveMapVehicle; km: number; x: number; y: number }[] = []
+    for (const c of corridors) {
+      for (const v of c.vehicles) {
+        const km = kmForLiveVehicle(v)
+        if (km == null) continue
+        const p = roadXYDiagram(km)
+        const jy = jitterId(v.id, 16)
+        const jx = jitterId(`${v.id}y`, 10)
+        out.push({
+          key: `${c.id}-${v.id}`,
+          v,
+          km,
+          x: p.x + jx,
+          y: p.y + jy + 16,
+        })
+      }
+    }
+    return out
+  }, [corridors])
+
+  const kmTicks = [0, 50, 100, 150, 200, 250, 300]
+
+  return (
+    <div className="highway-wrap live-road">
+      <div className="highway-diagram-head">
+        <strong>NH48</strong>
+        <span className="muted">Schematic · Bengaluru → Chennai ({NH48_KM_LENGTH} km)</span>
+      </div>
+      <svg
+        className="highway-svg highway-svg-live"
+        viewBox="0 0 1000 340"
+        role="img"
+        aria-label="NH48 corridor: incidents and ambulances by kilometre"
+      >
+        <defs>
+          <linearGradient id="hwRoadGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#334155" />
+            <stop offset="100%" stopColor="#1e293b" />
+          </linearGradient>
+        </defs>
+        <rect width="1000" height="340" fill="transparent" />
+        <path
+          d={roadPathDiagramD()}
+          fill="none"
+          stroke="url(#hwRoadGrad)"
+          strokeWidth="44"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity={0.95}
+        />
+        <path
+          d={roadPathDiagramD()}
+          fill="none"
+          stroke="#475569"
+          strokeWidth="3"
+          strokeDasharray="10 14"
+          opacity={0.85}
+        />
+        {kmTicks.map((km) => {
+          const { x, y } = roadXYDiagram(km)
+          return (
+            <g key={`tick-${km}`}>
+              <line x1={x} y1={y - 28} x2={x} y2={y + 28} stroke="#64748b" strokeWidth={1.5} opacity={0.7} />
+              <text x={x} y={y + 48} textAnchor="middle" fill="#94a3b8" fontSize={11} fontWeight={600}>
+                {km} km
+              </text>
+            </g>
+          )
+        })}
+        {NH48_DIAGRAM_CITIES.map(({ km, label }) => {
+          const { x, y } = roadXYDiagram(km)
+          return (
+            <g key={label}>
+              <text
+                x={x}
+                y={y - 56}
+                textAnchor="middle"
+                fill="#e2e8f0"
+                fontSize={13}
+                fontWeight={700}
+                style={{ textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
+              >
+                {label}
+              </text>
+              <circle cx={x} cy={y - 42} r={3} fill="#38bdf8" opacity={0.9} />
+            </g>
+          )
+        })}
+        {incidentsPlaced.map(({ key, inc, km, x, y }) => (
+          <g key={`inc-${key}`} transform={`translate(${x}, ${y})`}>
+            <title>
+              {`${inc.incident_type} · ${inc.severity} · KM ${km.toFixed(0)} · ${inc.status} · ${new Date(inc.created_at).toLocaleString()} · Trust ${trustLabel(inc.trust_score)}`}
+            </title>
+            <circle r={11} fill={incidentDotColor(inc.severity)} stroke="#0f172a" strokeWidth={2} className="hw-incident-dot" />
+          </g>
+        ))}
+        {vehiclesPlaced.map(({ key, v, km, x, y }) => (
+          <g key={`veh-${key}`} className="hw-amb-svg" transform={`translate(${x}, ${y})`}>
+            <title>
+              {`${v.label} · ${vehicleStatusLabel(v.status)} · KM ${km.toFixed(0)} · Assigned: ${v.assigned_incident_id ?? '—'}`}
+            </title>
+            <circle r={18} fill="rgba(15,23,42,0.9)" stroke="#64748b" strokeWidth={1.5} />
+            <text x={0} y={6} textAnchor="middle" fontSize={16}>
+              🚑
+            </text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  )
+}
+
+function LiveMapPanel({ leafletReady, corridors }: { leafletReady: boolean; corridors: LiveMapCorridor[] }) {
+  const [mode, setMode] = useState<'highway' | 'full'>('highway')
+  return (
+    <div className="live-map-panel">
+      <div className="live-map-view-toggle" role="tablist" aria-label="Map display mode">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'highway'}
+          className={mode === 'highway' ? 'active' : ''}
+          onClick={() => setMode('highway')}
+        >
+          Highway view
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'full'}
+          className={mode === 'full' ? 'active' : ''}
+          onClick={() => setMode('full')}
+        >
+          Full map view
+        </button>
+      </div>
+      {mode === 'highway' ? (
+        <LiveHighwayDiagram corridors={corridors} />
+      ) : (
+        <LiveLeafletMap leafletReady={leafletReady} corridors={corridors} />
+      )}
+    </div>
+  )
 }
 
 function LiveLeafletMap({ leafletReady, corridors }: { leafletReady: boolean; corridors: LiveMapCorridor[] }) {
@@ -1041,10 +1271,10 @@ export default function App() {
               <span className="active-amb">Ambulances active: {activeAmbulances}</span>
             </div>
             <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginTop: 0 }}>
-              Real OpenStreetMap terrain view. Incidents/ambulances use GPS when available; otherwise positions are estimated from NH48 KM (Bengaluru to Chennai).
+              Default: NH48 schematic with city labels and KM markers. Toggle <strong>Full map view</strong> for OpenTopoMap; positions use GPS when available, otherwise KM along Bengaluru–Chennai.
             </p>
             <p style={{ color: 'var(--muted)', fontSize: '0.82rem' }}>Corridors: {liveMap.length}. Refreshes every 15s.</p>
-            <LiveLeafletMap leafletReady={leafletReady} corridors={liveMap} />
+            <LiveMapPanel leafletReady={leafletReady} corridors={liveMap} />
           </>
         )}
 

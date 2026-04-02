@@ -3,13 +3,14 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.models import User, Vehicle
-from app.schemas import VehicleLocationBody, VehicleStatusBody
-from app.security import get_current_user
+from app.models import Corridor, Incident, User, Vehicle
+from app.schemas import IncidentDetailOut, VehicleLocationBody, VehicleMineOut, VehicleStatusBody
+from app.security import get_current_user, require_role
+from app.routers.incidents import incident_to_detail_out
 from app.socket_server import emit_to_corridor
 
 router = APIRouter(prefix="/vehicles", tags=["vehicles"])
@@ -21,6 +22,63 @@ async def _push_vehicle_location(corridor_id: uuid.UUID, payload: dict) -> None:
 
 async def _push_vehicle_status(corridor_id: uuid.UUID, payload: dict) -> None:
     await emit_to_corridor("vehicle:status", corridor_id, payload)
+
+
+@router.get("/mine", response_model=list[VehicleMineOut])
+def list_my_vehicles(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("driver")),
+):
+    """Vehicles assigned to this driver (App3 — no manual vehicle search)."""
+    rows = db.execute(
+        select(Vehicle, Corridor.name)
+        .join(Corridor, Vehicle.corridor_id == Corridor.id)
+        .where(Vehicle.driver_user_id == user.id)
+        .order_by(Vehicle.label)
+    ).all()
+    return [
+        VehicleMineOut(
+            id=v.id,
+            corridor_id=v.corridor_id,
+            corridor_name=cname,
+            label=v.label,
+            status=v.status,
+            vehicle_type=v.vehicle_type,
+        )
+        for v, cname in rows
+    ]
+
+
+@router.get("/{vehicle_id}/incidents", response_model=list[IncidentDetailOut])
+def list_vehicle_dispatched_incidents(
+    vehicle_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("driver")),
+):
+    """Active dispatches for this vehicle (polled by App3 every few seconds)."""
+    v = db.get(Vehicle, vehicle_id)
+    if not v:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+    if v.driver_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your vehicle")
+    id_rows = db.execute(
+        text(
+            """
+            SELECT i.id
+            FROM incidents i
+            INNER JOIN dispatches d ON d.incident_id = i.id AND d.vehicle_id = :vid
+            WHERE i.status NOT IN ('closed', 'cancelled')
+            ORDER BY d.created_at DESC
+            LIMIT 10
+            """
+        ),
+        {"vid": str(vehicle_id)},
+    ).scalars().all()
+    if not id_rows:
+        return []
+    stmt = select(Incident).where(Incident.id.in_(id_rows)).options(selectinload(Incident.events))
+    by_id = {inc.id: inc for inc in db.execute(stmt).scalars().all()}
+    return [incident_to_detail_out(db, by_id[iid]) for iid in id_rows if iid in by_id]
 
 
 @router.patch("/{vehicle_id}/location")

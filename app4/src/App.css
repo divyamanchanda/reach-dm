@@ -465,6 +465,45 @@ tr:last-child td {
   color: #4ade80;
 }
 
+.live-map-panel {
+  margin-top: 0.75rem;
+}
+
+.live-map-view-toggle {
+  display: inline-flex;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  margin-bottom: 0.75rem;
+  background: var(--surface);
+}
+
+.live-map-view-toggle button {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  padding: 0.45rem 1rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  width: auto;
+}
+
+.live-map-view-toggle button + button {
+  border-left: 1px solid var(--border);
+}
+
+.live-map-view-toggle button.active {
+  background: var(--accent);
+  color: var(--accent-contrast, #0f172a);
+}
+
+.live-map-view-toggle button:hover:not(.active) {
+  background: rgba(148, 163, 184, 0.12);
+}
+
 .live-map-wrap {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -476,6 +515,49 @@ tr:last-child td {
   display: flex;
   justify-content: flex-end;
   margin-bottom: 0.55rem;
+}
+
+.highway-diagram-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.92rem;
+}
+
+.highway-diagram-head .muted {
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.highway-svg-live {
+  height: 280px;
+  min-height: 220px;
+}
+
+@media (min-width: 720px) {
+  .highway-svg-live {
+    height: 300px;
+  }
+}
+
+.hw-incident-dot {
+  cursor: default;
+}
+
+.hw-amb-svg {
+  cursor: default;
+  animation: hw-amb-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes hw-amb-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.82;
+  }
 }
 
 .leaflet-box.live-leaflet-map {

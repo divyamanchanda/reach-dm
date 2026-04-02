@@ -113,6 +113,17 @@ class NearbyVehicleOut(BaseModel):
     eta_source: str
 
 
+class VehicleMineOut(BaseModel):
+    """Vehicle tied to the logged-in driver (App3)."""
+
+    id: uuid.UUID
+    corridor_id: uuid.UUID
+    corridor_name: str
+    label: str
+    status: str
+    vehicle_type: str
+
+
 class DispatchBody(BaseModel):
     vehicle_id: uuid.UUID
 

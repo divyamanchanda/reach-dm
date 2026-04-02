@@ -18,6 +18,33 @@ from app.socket_server import emit_to_corridor
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 
+def incident_to_detail_out(db: Session, inc: Incident) -> IncidentDetailOut:
+    """Build API detail for an incident with timeline (shared with vehicle driver endpoints)."""
+    lat, lng = incident_lat_lng(db, inc)
+    timeline = [TimelineEventOut.model_validate(e) for e in inc.events]
+    return IncidentDetailOut(
+        id=inc.id,
+        corridor_id=inc.corridor_id,
+        incident_type=inc.incident_type,
+        severity=inc.severity,
+        km_marker=inc.km_marker,
+        latitude=lat,
+        longitude=lng,
+        trust_score=inc.trust_score,
+        trust_recommendation=inc.trust_recommendation,
+        trust_factors=list(inc.trust_factors or []),
+        status=inc.status,
+        reporter_type=inc.reporter_type,
+        injured_count=inc.injured_count,
+        notes=inc.notes,
+        photo_url=inc.photo_url,
+        public_report_id=inc.public_report_id,
+        created_at=inc.created_at,
+        updated_at=inc.updated_at,
+        timeline=timeline,
+    )
+
+
 async def _push_incident_new(corridor_id: uuid.UUID, payload: dict) -> None:
     await emit_to_corridor("incident:new", corridor_id, payload)
 
@@ -48,29 +75,7 @@ def get_incident(
     inc = db.execute(stmt).scalar_one_or_none()
     if not inc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
-    lat, lng = incident_lat_lng(db, inc)
-    timeline = [TimelineEventOut.model_validate(e) for e in inc.events]
-    return IncidentDetailOut(
-        id=inc.id,
-        corridor_id=inc.corridor_id,
-        incident_type=inc.incident_type,
-        severity=inc.severity,
-        km_marker=inc.km_marker,
-        latitude=lat,
-        longitude=lng,
-        trust_score=inc.trust_score,
-        trust_recommendation=inc.trust_recommendation,
-        trust_factors=list(inc.trust_factors or []),
-        status=inc.status,
-        reporter_type=inc.reporter_type,
-        injured_count=inc.injured_count,
-        notes=inc.notes,
-        photo_url=inc.photo_url,
-        public_report_id=inc.public_report_id,
-        created_at=inc.created_at,
-        updated_at=inc.updated_at,
-        timeline=timeline,
-    )
+    return incident_to_detail_out(db, inc)
 
 
 @router.get("/{incident_id}/nearby-vehicles", response_model=list[NearbyVehicleOut])
