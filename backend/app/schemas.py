@@ -26,6 +26,13 @@ class TokenResponse(BaseModel):
     user: UserPublic
 
 
+class CorridorPublicOut(BaseModel):
+    """Minimal corridor info for public SOS highway picker (no auth)."""
+
+    id: uuid.UUID
+    name: str
+
+
 class CorridorOut(BaseModel):
     id: uuid.UUID
     name: str

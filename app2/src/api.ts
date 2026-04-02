@@ -1,5 +1,6 @@
-const API =
+const API = (
   import.meta.env.VITE_API_URL || 'https://reach-dm-production.up.railway.app'
+).replace(/\/api\/?$/, '')
 const PREFIX = '/api'
 
 export function apiUrl(path: string) {

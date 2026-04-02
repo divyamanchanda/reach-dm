@@ -8,7 +8,15 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Corridor, Incident, User, Vehicle
-from app.schemas import CorridorOut, CorridorStatsOut, IncidentListItem, PublicIncidentCreate, PublicIncidentResponse, VehicleMapOut
+from app.schemas import (
+    CorridorOut,
+    CorridorPublicOut,
+    CorridorStatsOut,
+    IncidentListItem,
+    PublicIncidentCreate,
+    PublicIncidentResponse,
+    VehicleMapOut,
+)
 from app.security import get_current_user
 from app.services.public_incident import create_public_incident_row
 from app.routers.incidents import _push_corridor_stats, _push_incident_new
@@ -27,6 +35,14 @@ def list_corridors(db: Session = Depends(get_db), user: User = Depends(get_curre
     q = select(Corridor).where(Corridor.is_active.is_(True)).order_by(Corridor.name)
     rows = db.execute(q).scalars().all()
     return [CorridorOut.model_validate(r) for r in rows]
+
+
+@router.get("/public", response_model=list[CorridorPublicOut])
+def list_corridors_public(db: Session = Depends(get_db)):
+    """Active corridors for public emergency reporting (highway name dropdown)."""
+    q = select(Corridor).where(Corridor.is_active.is_(True)).order_by(Corridor.name)
+    rows = db.execute(q).scalars().all()
+    return [CorridorPublicOut(id=r.id, name=r.name) for r in rows]
 
 
 @router.get("/{corridor_id}/stats", response_model=CorridorStatsOut)
