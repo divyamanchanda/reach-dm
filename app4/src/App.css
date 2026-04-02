@@ -531,13 +531,16 @@ tr:last-child td {
 }
 
 .highway-svg-live {
-  height: 280px;
-  min-height: 220px;
+  width: 100%;
+  height: auto;
+  max-height: 240px;
+  min-height: 180px;
+  display: block;
 }
 
 @media (min-width: 720px) {
   .highway-svg-live {
-    height: 300px;
+    max-height: 260px;
   }
 }
 

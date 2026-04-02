@@ -1,10 +1,47 @@
-const API = (
-  import.meta.env.VITE_API_URL || 'https://reach-dm-production.up.railway.app'
-).replace(/\/api\/?$/, '')
-const PREFIX = '/api'
+/** Production API host (no trailing path). Requests use ${API_ORIGIN}/api/... */
+const DEFAULT_API_ORIGIN = 'https://reach-dm-production.up.railway.app'
 
-export function apiUrl(path: string) {
-  return `${API}${PREFIX}${path.startsWith('/') ? path : `/${path}`}`
+function normalizeApiOrigin(raw: string | undefined): string {
+  let s = (raw ?? DEFAULT_API_ORIGIN).trim()
+  if (!s) return DEFAULT_API_ORIGIN
+  // Relative values like "/api" (Vite proxy style) strip to "" — must not build relative fetch URLs.
+  s = s.replace(/\/api\/?$/, '')
+  s = s.replace(/\/+$/, '')
+  if (!s || s === 'http:' || s === 'https:') return DEFAULT_API_ORIGIN
+  return s
+}
+
+/** Base origin only (Socket.IO, etc.). Same as pre-normalize VITE without /api suffix. */
+export const API = normalizeApiOrigin(import.meta.env.VITE_API_URL as string | undefined)
+
+export function apiUrl(path: string): string {
+  const p = path.startsWith('/') ? path : `/${path}`
+  // Always: https://reach-dm-production.up.railway.app/api/...
+  return `${API}/api${p}`
+}
+
+function authHeaders(token: string): HeadersInit {
+  const t = token.trim()
+  return {
+    Authorization: `Bearer ${t}`,
+    Accept: 'application/json',
+    'Cache-Control': 'no-store',
+    Pragma: 'no-cache',
+  }
+}
+
+async function readErrorMessage(r: Response): Promise<string> {
+  const text = await r.text()
+  try {
+    const data = JSON.parse(text) as { detail?: unknown }
+    const d = data.detail
+    if (typeof d === 'string') return d
+    if (Array.isArray(d))
+      return d.map((x: { msg?: string }) => x.msg).filter(Boolean).join(', ') || text
+  } catch {
+    /* plain text */
+  }
+  return text || `HTTP ${r.status}`
 }
 
 export type User = {
@@ -18,67 +55,52 @@ export type User = {
 export async function login(phone: string, password: string) {
   const r = await fetch(apiUrl('/auth/login'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ phone, password }),
     cache: 'no-store',
   })
   if (!r.ok) {
-    const data = (await r.json()) as { detail?: unknown }
-    const detail = data.detail
-    const msg =
-      typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join(', ')
-          : 'Login failed'
-    throw new Error(msg || 'Login failed')
+    throw new Error(await readErrorMessage(r))
   }
   return r.json() as Promise<{ access_token: string; user: User }>
 }
 
 export async function fetchJson<T>(path: string, token: string): Promise<T> {
+  if (!token?.trim()) throw new Error('Not signed in (missing token)')
   const r = await fetch(apiUrl(path), {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Cache-Control': 'no-store',
-      Pragma: 'no-cache',
-    },
+    headers: authHeaders(token),
     cache: 'no-store',
   })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw new Error(await readErrorMessage(r))
   return r.json()
 }
 
 export async function patchJson<T>(path: string, token: string, body: unknown): Promise<T> {
+  if (!token?.trim()) throw new Error('Not signed in (missing token)')
   const r = await fetch(apiUrl(path), {
     method: 'PATCH',
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...authHeaders(token),
       'Content-Type': 'application/json',
-      'Cache-Control': 'no-store',
-      Pragma: 'no-cache',
     },
     cache: 'no-store',
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw new Error(await readErrorMessage(r))
   return r.json()
 }
 
 export async function postJson<T>(path: string, token: string, body: unknown): Promise<T> {
+  if (!token?.trim()) throw new Error('Not signed in (missing token)')
   const r = await fetch(apiUrl(path), {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...authHeaders(token),
       'Content-Type': 'application/json',
-      'Cache-Control': 'no-store',
-      Pragma: 'no-cache',
     },
     cache: 'no-store',
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw new Error(await readErrorMessage(r))
   return r.json()
 }
-
-export { API }

@@ -181,11 +181,14 @@ function vehicleStatusLabel(status: string): string {
   return s
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
 const NH48_KM_LENGTH = 312
+
+const HW_DIAGRAM = { w: 1000, h: 210, pad: 52, roadY: 118 } as const
+
+function kmToDiagramX(km: number): number {
+  const t = Math.max(0, Math.min(1, km / NH48_KM_LENGTH))
+  return HW_DIAGRAM.pad + t * (HW_DIAGRAM.w - 2 * HW_DIAGRAM.pad)
+}
 
 function estimatePointFromKm(km: number): LatLng {
   const bengaluru = { lat: 12.9716, lng: 77.5946 }
@@ -211,28 +214,11 @@ function kmAlongNh48FromLatLng(lat: number, lng: number): number {
 
 const NH48_DIAGRAM_CITIES: { km: number; label: string }[] = [
   { km: 0, label: 'Bengaluru' },
-  { km: 45, label: 'Hosur' },
+  { km: 40, label: 'Hosur' },
   { km: 90, label: 'Krishnagiri' },
-  { km: 200, label: 'Vellore' },
+  { km: 190, label: 'Vellore' },
   { km: NH48_KM_LENGTH, label: 'Chennai' },
 ]
-
-function roadXYDiagram(km: number): { x: number; y: number } {
-  const t = Math.max(0, Math.min(1, km / NH48_KM_LENGTH))
-  const x = 55 + t * 890
-  const y = 195 + 50 * Math.sin(t * Math.PI)
-  return { x, y }
-}
-
-function roadPathDiagramD(): string {
-  const steps = 56
-  const parts: string[] = []
-  for (let i = 0; i <= steps; i++) {
-    const { x, y } = roadXYDiagram((i / steps) * NH48_KM_LENGTH)
-    parts.push(i === 0 ? `M ${x.toFixed(1)} ${y.toFixed(1)}` : `L ${x.toFixed(1)} ${y.toFixed(1)}`)
-  }
-  return parts.join(' ')
-}
 
 function jitterId(id: string, range: number): number {
   let h = 0
@@ -578,26 +564,21 @@ function CorridorRouteMap({
 }
 
 function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
+  const roadY = HW_DIAGRAM.roadY
+
   const incidentsPlaced = useMemo(() => {
     const out: { key: string; inc: LiveMapIncident; km: number; x: number; y: number }[] = []
     for (const c of corridors) {
       for (const inc of c.incidents) {
         const km = kmForLiveIncident(inc)
         if (km == null) continue
-        const p = roadXYDiagram(km)
-        const jy = jitterId(inc.id, 16)
-        const jx = jitterId(`${inc.id}x`, 10)
-        out.push({
-          key: `${c.id}-${inc.id}`,
-          inc,
-          km,
-          x: p.x + jx,
-          y: p.y + jy - 18,
-        })
+        const x = kmToDiagramX(km) + jitterId(inc.id, 8)
+        const y = roadY - 38 + jitterId(`${inc.id}y`, 6)
+        out.push({ key: `${c.id}-${inc.id}`, inc, km, x, y })
       }
     }
     return out
-  }, [corridors])
+  }, [corridors, roadY])
 
   const vehiclesPlaced = useMemo(() => {
     const out: { key: string; v: LiveMapVehicle; km: number; x: number; y: number }[] = []
@@ -605,77 +586,76 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
       for (const v of c.vehicles) {
         const km = kmForLiveVehicle(v)
         if (km == null) continue
-        const p = roadXYDiagram(km)
-        const jy = jitterId(v.id, 16)
-        const jx = jitterId(`${v.id}y`, 10)
-        out.push({
-          key: `${c.id}-${v.id}`,
-          v,
-          km,
-          x: p.x + jx,
-          y: p.y + jy + 16,
-        })
+        const x = kmToDiagramX(km) + jitterId(v.id, 8)
+        const y = roadY + 42 + jitterId(`${v.id}y`, 6)
+        out.push({ key: `${c.id}-${v.id}`, v, km, x, y })
       }
     }
     return out
-  }, [corridors])
+  }, [corridors, roadY])
 
   const kmTicks = [0, 50, 100, 150, 200, 250, 300]
+  const x0 = kmToDiagramX(0)
+  const xEnd = kmToDiagramX(NH48_KM_LENGTH)
 
   return (
     <div className="highway-wrap live-road">
       <div className="highway-diagram-head">
-        <strong>NH48</strong>
-        <span className="muted">Schematic · Bengaluru → Chennai ({NH48_KM_LENGTH} km)</span>
+        <strong>NH48 schematic</strong>
+        <span className="muted">
+          Horizontal KM {0}–{NH48_KM_LENGTH} · Incidents &amp; vehicles from <code>/admin/live-map</code>
+        </span>
       </div>
       <svg
         className="highway-svg highway-svg-live"
-        viewBox="0 0 1000 340"
+        viewBox={`0 0 ${HW_DIAGRAM.w} ${HW_DIAGRAM.h}`}
         role="img"
-        aria-label="NH48 corridor: incidents and ambulances by kilometre"
+        aria-label="Highway diagram: incidents and ambulances by kilometre"
       >
         <defs>
-          <linearGradient id="hwRoadGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <linearGradient id="hwRoadGradH" x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="#334155" />
             <stop offset="100%" stopColor="#1e293b" />
           </linearGradient>
         </defs>
-        <rect width="1000" height="340" fill="transparent" />
-        <path
-          d={roadPathDiagramD()}
-          fill="none"
-          stroke="url(#hwRoadGrad)"
-          strokeWidth="44"
+        <rect width={HW_DIAGRAM.w} height={HW_DIAGRAM.h} fill="transparent" />
+        <line
+          x1={x0}
+          y1={roadY}
+          x2={xEnd}
+          y2={roadY}
+          stroke="url(#hwRoadGradH)"
+          strokeWidth={44}
           strokeLinecap="round"
-          strokeLinejoin="round"
-          opacity={0.95}
         />
-        <path
-          d={roadPathDiagramD()}
-          fill="none"
+        <line
+          x1={x0}
+          y1={roadY}
+          x2={xEnd}
+          y2={roadY}
           stroke="#475569"
-          strokeWidth="3"
-          strokeDasharray="10 14"
+          strokeWidth={3}
+          strokeDasharray="12 16"
           opacity={0.85}
         />
         {kmTicks.map((km) => {
-          const { x, y } = roadXYDiagram(km)
+          const x = kmToDiagramX(km)
           return (
             <g key={`tick-${km}`}>
-              <line x1={x} y1={y - 28} x2={x} y2={y + 28} stroke="#64748b" strokeWidth={1.5} opacity={0.7} />
-              <text x={x} y={y + 48} textAnchor="middle" fill="#94a3b8" fontSize={11} fontWeight={600}>
+              <line x1={x} y1={roadY - 24} x2={x} y2={roadY + 24} stroke="#64748b" strokeWidth={1.5} opacity={0.7} />
+              <text x={x} y={roadY + 44} textAnchor="middle" fill="#94a3b8" fontSize={11} fontWeight={600}>
                 {km} km
               </text>
             </g>
           )
         })}
         {NH48_DIAGRAM_CITIES.map(({ km, label }) => {
-          const { x, y } = roadXYDiagram(km)
+          const x = kmToDiagramX(km)
           return (
             <g key={label}>
               <text
                 x={x}
-                y={y - 56}
+                y={roadY - 52}
                 textAnchor="middle"
                 fill="#e2e8f0"
                 fontSize={13}
@@ -684,7 +664,7 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
               >
                 {label}
               </text>
-              <circle cx={x} cy={y - 42} r={3} fill="#38bdf8" opacity={0.9} />
+              <circle cx={x} cy={roadY - 38} r={3} fill="#38bdf8" opacity={0.9} />
             </g>
           )
         })}
@@ -708,151 +688,6 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
           </g>
         ))}
       </svg>
-    </div>
-  )
-}
-
-function LiveMapPanel({ leafletReady, corridors }: { leafletReady: boolean; corridors: LiveMapCorridor[] }) {
-  const [mode, setMode] = useState<'highway' | 'full'>('highway')
-  return (
-    <div className="live-map-panel">
-      <div className="live-map-view-toggle" role="tablist" aria-label="Map display mode">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === 'highway'}
-          className={mode === 'highway' ? 'active' : ''}
-          onClick={() => setMode('highway')}
-        >
-          Highway view
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === 'full'}
-          className={mode === 'full' ? 'active' : ''}
-          onClick={() => setMode('full')}
-        >
-          Full map view
-        </button>
-      </div>
-      {mode === 'highway' ? (
-        <LiveHighwayDiagram corridors={corridors} />
-      ) : (
-        <LiveLeafletMap leafletReady={leafletReady} corridors={corridors} />
-      )}
-    </div>
-  )
-}
-
-function LiveLeafletMap({ leafletReady, corridors }: { leafletReady: boolean; corridors: LiveMapCorridor[] }) {
-  const hostRef = useRef<HTMLDivElement | null>(null)
-  const mapRef = useRef<any>(null)
-  const layerRef = useRef<any>(null)
-  const markerPointsRef = useRef<[number, number][]>([])
-  const hasAnyMappable = corridors.some(
-    (c) =>
-      c.incidents.some((i) => incidentLatLng(i) != null) ||
-      c.vehicles.some((v) => vehicleLatLng(v) != null),
-  )
-
-  const scheduleInvalidate = useCallback((map: any) => {
-    window.setTimeout(() => map.invalidateSize(), 120)
-    window.requestAnimationFrame(() => map.invalidateSize())
-  }, [])
-
-  useEffect(() => {
-    if (!leafletReady) return
-    const L = (window as any).L
-    const el = hostRef.current
-    if (!L || !el || mapRef.current) return
-    if ((el as any)._leaflet_id) el.innerHTML = ''
-    const map = L.map(el).setView([20.5937, 78.9629], 6)
-    L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors, SRTM | OpenTopoMap',
-      maxZoom: 17,
-    }).addTo(map)
-    mapRef.current = map
-    layerRef.current = L.layerGroup().addTo(map)
-    scheduleInvalidate(map)
-    return () => {
-      map.remove()
-      mapRef.current = null
-      layerRef.current = null
-    }
-  }, [leafletReady, scheduleInvalidate])
-
-  useEffect(() => {
-    const L = (window as any).L
-    const map = mapRef.current
-    const layer = layerRef.current
-    if (!leafletReady || !L || !map || !layer) return
-    layer.clearLayers()
-    const points: [number, number][] = []
-
-    for (const corridor of corridors) {
-      for (const inc of corridor.incidents) {
-        const p = incidentLatLng(inc)
-        if (!p) continue
-        points.push([p.lat, p.lng])
-        const marker = L.circleMarker([p.lat, p.lng], {
-          radius: 8,
-          color: '#0f172a',
-          weight: 1.5,
-          fillColor: incidentDotColor(inc.severity),
-          fillOpacity: 0.92,
-        })
-        marker.bindPopup(
-          `<strong>${escapeHtml(inc.incident_type)}</strong><br/>` +
-            `Severity: ${escapeHtml(inc.severity)}<br/>` +
-            `Status: ${escapeHtml(inc.status)}<br/>` +
-            `Trust: ${escapeHtml(trustLabel(inc.trust_score))}<br/>` +
-            `Time reported: ${escapeHtml(new Date(inc.created_at).toLocaleString())}<br/>` +
-            `Report ID: ${inc.public_report_id ? escapeHtml(inc.public_report_id) : '—'}`,
-        )
-        marker.addTo(layer)
-      }
-      for (const v of corridor.vehicles) {
-        const p = vehicleLatLng(v)
-        if (!p) continue
-        points.push([p.lat, p.lng])
-        const marker = L.marker([p.lat, p.lng], {
-          icon: L.divIcon({
-            className: 'ambulance-marker',
-            html: '<span>🚑</span>',
-            iconSize: [26, 26],
-            iconAnchor: [13, 13],
-          }),
-        })
-        marker.bindPopup(
-          `<strong>${escapeHtml(v.label)}</strong><br/>` +
-            `Status: ${escapeHtml(vehicleStatusLabel(v.status))}<br/>` +
-            `Assigned incident: ${v.assigned_incident_id ?? '—'}`,
-        )
-        marker.addTo(layer)
-      }
-    }
-
-    markerPointsRef.current = points
-  }, [leafletReady, corridors])
-
-  const fitAllMarkers = useCallback(() => {
-    const L = (window as any).L
-    const map = mapRef.current
-    const points = markerPointsRef.current
-    if (!L || !map || points.length === 0) return
-    map.fitBounds(L.latLngBounds(points), { padding: [28, 28] })
-  }, [])
-
-  if (!leafletReady) return <div className="leaflet-box live-leaflet-map map-loading">Loading map engine...</div>
-  return (
-    <div className="live-map-wrap">
-      <div className="inline-row live-map-toolbar">
-        <button type="button" onClick={fitAllMarkers} disabled={!hasAnyMappable}>
-          Fit all markers
-        </button>
-      </div>
-      <div className="leaflet-box live-leaflet-map" ref={hostRef} />
     </div>
   )
 }
@@ -1271,10 +1106,12 @@ export default function App() {
               <span className="active-amb">Ambulances active: {activeAmbulances}</span>
             </div>
             <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginTop: 0 }}>
-              Default: NH48 schematic with city labels and KM markers. Toggle <strong>Full map view</strong> for OpenTopoMap; positions use GPS when available, otherwise KM along Bengaluru–Chennai.
+              SVG highway: positions use <strong>km_marker</strong> when set, otherwise GPS projected onto the Bengaluru–Chennai axis (0–312 km).
             </p>
-            <p style={{ color: 'var(--muted)', fontSize: '0.82rem' }}>Corridors: {liveMap.length}. Refreshes every 15s.</p>
-            <LiveMapPanel leafletReady={leafletReady} corridors={liveMap} />
+            <p style={{ color: 'var(--muted)', fontSize: '0.82rem' }}>
+              Corridors: {liveMap.length}. Data: <code>GET /api/admin/live-map</code>. Refreshes every 15s.
+            </p>
+            <LiveHighwayDiagram corridors={liveMap} />
           </>
         )}
 
