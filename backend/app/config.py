@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,8 +36,24 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("CORS_ORIGINS", "CORS_ORIGIN"),
     )
 
-    api_prefix: str = "/api"
+    api_prefix: str = Field(
+        default="/api",
+        validation_alias=AliasChoices("API_PREFIX", "api_prefix"),
+        description="URL prefix for all HTTP API routes (App2 expects /api/public/corridors).",
+    )
     routing_base_url: str = "https://router.project-osrm.org"
+
+    @field_validator("api_prefix", mode="after")
+    @classmethod
+    def normalize_api_prefix(cls, v: str) -> str:
+        """Railway sometimes sets API_PREFIX to empty; App2 hardcodes /api/...."""
+        s = (v or "").strip()
+        if not s:
+            return "/api"
+        if not s.startswith("/"):
+            s = f"/{s}"
+        s = s.rstrip("/")
+        return s if s else "/api"
 
     @property
     def sqlalchemy_database_url(self) -> str:

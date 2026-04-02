@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import socketio
@@ -19,6 +20,7 @@ fastapi_app.add_middleware(
 )
 
 api = settings.api_prefix
+# App2 (public SOS) has no login — must stay unauthenticated (see routers/public.py).
 fastapi_app.include_router(health.router, prefix=api)
 fastapi_app.include_router(public.router, prefix=api)
 fastapi_app.include_router(auth.router, prefix=api)
@@ -30,6 +32,10 @@ fastapi_app.include_router(vehicles.router, prefix=api)
 
 @fastapi_app.on_event("startup")
 def ensure_coordinate_columns() -> None:
+    logging.getLogger("uvicorn.error").info(
+        "REACH public corridors (no JWT): GET %s/public/corridors",
+        api,
+    )
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS start_lat DOUBLE PRECISION"))
         conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS start_lng DOUBLE PRECISION"))
