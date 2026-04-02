@@ -6,6 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.corridor_public import list_active_corridors_for_public
 from app.database import get_db
 from app.models import Corridor, Incident, User, Vehicle
 from app.schemas import (
@@ -39,10 +40,8 @@ def list_corridors(db: Session = Depends(get_db), user: User = Depends(get_curre
 
 @router.get("/public", response_model=list[CorridorPublicOut])
 def list_corridors_public(db: Session = Depends(get_db)):
-    """Active corridors for public emergency reporting (highway name dropdown)."""
-    q = select(Corridor).where(Corridor.is_active.is_(True)).order_by(Corridor.name)
-    rows = db.execute(q).scalars().all()
-    return [CorridorPublicOut(id=r.id, name=r.name) for r in rows]
+    """Active corridors for public emergency reporting (alias path)."""
+    return list_active_corridors_for_public(db)
 
 
 @router.get("/{corridor_id}/stats", response_model=CorridorStatsOut)

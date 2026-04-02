@@ -5,7 +5,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.database import engine
-from app.routers import admin, auth, corridors, health, incidents, vehicles
+from app.routers import admin, auth, corridors, health, incidents, public, vehicles
 from app.socket_server import sio
 
 fastapi_app = FastAPI(title="REACH API", version="0.1.0")
@@ -20,6 +20,7 @@ fastapi_app.add_middleware(
 
 api = settings.api_prefix
 fastapi_app.include_router(health.router, prefix=api)
+fastapi_app.include_router(public.router, prefix=api)
 fastapi_app.include_router(auth.router, prefix=api)
 fastapi_app.include_router(admin.router, prefix=api)
 fastapi_app.include_router(corridors.router, prefix=api)

@@ -6,6 +6,58 @@ const DEFAULT_CORRIDOR = import.meta.env.VITE_CORRIDOR_ID || ''
 
 type CorridorOption = { id: string; name: string }
 
+function readCorridorsFromEnv(): CorridorOption[] | null {
+  const raw = import.meta.env.VITE_PUBLIC_CORRIDORS_JSON as string | undefined
+  if (!raw?.trim()) return null
+  try {
+    const data = JSON.parse(raw) as unknown
+    if (!Array.isArray(data)) return null
+    const out: CorridorOption[] = []
+    for (const item of data) {
+      if (!item || typeof item !== 'object') continue
+      const id = 'id' in item ? String((item as { id: unknown }).id) : ''
+      const name = 'name' in item ? String((item as { name: unknown }).name) : ''
+      if (id) out.push({ id, name: name || id })
+    }
+    return out.length ? out : null
+  } catch {
+    return null
+  }
+}
+
+async function fetchCorridorOptions(): Promise<{ rows: CorridorOption[]; error: string | null }> {
+  const envRows = readCorridorsFromEnv()
+  let lastStatus = 0
+  for (const path of ['/public/corridors', '/corridors/public']) {
+    try {
+      const r = await fetch(apiUrl(path))
+      lastStatus = r.status
+      if (!r.ok) continue
+      const data = (await r.json()) as unknown
+      if (!Array.isArray(data)) continue
+      const rows: CorridorOption[] = []
+      for (const x of data) {
+        if (!x || typeof x !== 'object' || !('id' in x)) continue
+        const id = String((x as { id: unknown }).id)
+        const name = 'name' in x ? String((x as { name: unknown }).name) : id
+        if (id) rows.push({ id, name })
+      }
+      return { rows, error: rows.length ? null : 'No highways are available yet.' }
+    } catch {
+      continue
+    }
+  }
+  if (envRows?.length) return { rows: envRows, error: null }
+  const hint =
+    lastStatus === 404
+      ? ' Update the REACH API (deploy latest backend) so /api/public/corridors is available.'
+      : ''
+  return {
+    rows: [],
+    error: `Could not load highways.${hint} You can set VITE_PUBLIC_CORRIDORS_JSON on the web app as a temporary list.`,
+  }
+}
+
 type PublicResponse = {
   incident_id: string
   public_report_id: string
@@ -39,6 +91,8 @@ export default function App() {
   const [corridorId, setCorridorId] = useState(corridorFromUrl || DEFAULT_CORRIDOR)
   const [corridors, setCorridors] = useState<CorridorOption[]>([])
   const [corridorsError, setCorridorsError] = useState<string | null>(null)
+  const [corridorsLoading, setCorridorsLoading] = useState(false)
+  const [corridorsRetryKey, setCorridorsRetryKey] = useState(0)
 
   const [incidentType, setIncidentType] = useState<string>(INCIDENT_TYPES[0].value)
   const [severity, setSeverity] = useState<string>('major')
@@ -84,25 +138,18 @@ export default function App() {
   useEffect(() => {
     if (phase !== 'form') return
     let cancelled = false
+    setCorridorsLoading(true)
     ;(async () => {
-      try {
-        const r = await fetch(apiUrl('/corridors/public'))
-        if (!r.ok) throw new Error('Could not load highways')
-        const rows = (await r.json()) as { id: string; name: string }[]
-        if (cancelled) return
-        setCorridors(rows.map((x) => ({ id: x.id, name: x.name })))
-        setCorridorsError(null)
-      } catch (e) {
-        if (!cancelled) {
-          setCorridors([])
-          setCorridorsError(e instanceof Error ? e.message : 'Could not load highways')
-        }
-      }
+      const { rows, error } = await fetchCorridorOptions()
+      if (cancelled) return
+      setCorridors(rows)
+      setCorridorsError(error)
+      setCorridorsLoading(false)
     })()
     return () => {
       cancelled = true
     }
-  }, [phase])
+  }, [phase, corridorsRetryKey])
 
   useEffect(() => {
     if (phase !== 'form') return
@@ -275,7 +322,17 @@ export default function App() {
                 <p className="loc-bad" role="status">
                   Location not found
                 </p>
-                {corridorsError && <p className="sos-warn">{corridorsError}</p>}
+                {corridorsLoading && <p className="sos-warn">Loading highways…</p>}
+                {corridorsError && !corridorsLoading && <p className="sos-warn">{corridorsError}</p>}
+                {!corridorsLoading && (corridorsError || corridors.length === 0) && (
+                  <button
+                    type="button"
+                    className="sos-retry-hw"
+                    onClick={() => setCorridorsRetryKey((k) => k + 1)}
+                  >
+                    Reload highway list
+                  </button>
+                )}
                 <label className="sos-select-label">
                   Highway
                   <select
@@ -283,8 +340,11 @@ export default function App() {
                     value={corridorId}
                     onChange={(e) => setCorridorId(e.target.value)}
                     required={showManualLocation}
+                    disabled={corridorsLoading}
                   >
-                    <option value="">Select highway…</option>
+                    <option value="">
+                      {corridorsLoading ? 'Loading…' : 'Select highway…'}
+                    </option>
                     {corridors.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
@@ -308,22 +368,38 @@ export default function App() {
               </div>
             )}
             {needsHighwayWhenGps && (
-              <label className="sos-select-label sos-select-tight">
-                Which highway are you on?
-                <select
-                  className="sos-select"
-                  value={corridorId}
-                  onChange={(e) => setCorridorId(e.target.value)}
-                  required
-                >
-                  <option value="">Select highway…</option>
-                  {corridors.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
+              <>
+                {corridorsLoading && <p className="sos-warn">Loading highways…</p>}
+                {corridorsError && !corridorsLoading && <p className="sos-warn">{corridorsError}</p>}
+                {!corridorsLoading && (corridorsError || corridors.length === 0) && (
+                  <button
+                    type="button"
+                    className="sos-retry-hw"
+                    onClick={() => setCorridorsRetryKey((k) => k + 1)}
+                  >
+                    Reload highway list
+                  </button>
+                )}
+                <label className="sos-select-label sos-select-tight">
+                  Which highway are you on?
+                  <select
+                    className="sos-select"
+                    value={corridorId}
+                    onChange={(e) => setCorridorId(e.target.value)}
+                    required
+                    disabled={corridorsLoading}
+                  >
+                    <option value="">
+                      {corridorsLoading ? 'Loading…' : 'Select highway…'}
                     </option>
-                  ))}
-                </select>
-              </label>
+                    {corridors.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
             )}
           </div>
 

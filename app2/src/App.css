@@ -276,7 +276,31 @@
   border: 2px solid rgba(254, 202, 202, 0.5);
   background: #fff1f2;
   color: #450a0a;
-  font-size: 1rem;
+  /* 16px avoids iOS Safari zooming inputs on focus */
+  font-size: 16px;
+  line-height: 1.3;
+  -webkit-appearance: menulist;
+  appearance: menulist;
+  cursor: pointer;
+}
+
+.sos-select:disabled {
+  opacity: 0.75;
+  cursor: wait;
+}
+
+.sos-retry-hw {
+  width: 100%;
+  min-height: 2.5rem;
+  margin-bottom: 0.25rem;
+  border-radius: 10px;
+  border: 1px solid rgba(254, 202, 202, 0.55);
+  background: rgba(0, 0, 0, 0.15);
+  color: #fecaca;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 .sos-km-input {
