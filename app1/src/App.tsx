@@ -184,6 +184,8 @@ function RecenterMap({ latitude, longitude }: { latitude: number; longitude: num
   const map = useMap()
   useEffect(() => {
     map.setView([latitude, longitude], Math.max(map.getZoom(), 13))
+    // Ensures Leaflet recalculates tile container size after React/Vercel layout changes.
+    map.invalidateSize()
   }, [latitude, longitude, map])
   return null
 }
