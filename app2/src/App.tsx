@@ -38,6 +38,9 @@ export default function App() {
   const [severity, setSeverity] = useState('major')
   const [injured, setInjured] = useState(0)
   const [notes, setNotes] = useState('')
+  const [kmMarker, setKmMarker] = useState('')
+  const [landmark, setLandmark] = useState('')
+
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<PublicResponse | null>(null)
@@ -61,16 +64,35 @@ export default function App() {
     )
   }, [])
 
+  const gpsAvailable = geo != null
+  const gpsMissing = !gpsAvailable && geoStatus !== '' && geoStatus !== 'GPS captured'
+
+  const kmMarkerNumber = kmMarker.trim() === '' ? null : Number(kmMarker.trim())
+  const kmMarkerValid = kmMarkerNumber != null && Number.isFinite(kmMarkerNumber)
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
     setResult(null)
+
     if (!corridorId) {
       setError('Missing corridor id. Open with ?corridor=<uuid> or set VITE_CORRIDOR_ID.')
       return
     }
+
+    if (gpsMissing) {
+      if (!kmMarkerValid) {
+        setError('Nearest KM marker is required when GPS is unavailable.')
+        return
+      }
+    }
+
     setBusy(true)
     try {
+      const landmarkTrim = landmark.trim()
+      const extraNotes = landmarkTrim ? `Nearest landmark or town: ${landmarkTrim}` : ''
+      const composedNotes = [notes.trim(), extraNotes].filter(Boolean).join('\n')
+
       const r = await fetch(apiUrl(`/corridors/${corridorId}/incidents/public`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -78,15 +100,18 @@ export default function App() {
           incident_type: incidentType,
           severity,
           injured_count: injured,
-          notes: notes || undefined,
+          notes: composedNotes || undefined,
           latitude: geo?.lat,
           longitude: geo?.lng,
+          km_marker: gpsMissing ? kmMarkerNumber : null,
         }),
       })
+
       if (!r.ok) {
         const t = await r.text()
         throw new Error(t || 'Request failed')
       }
+
       setResult((await r.json()) as PublicResponse)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed')
@@ -128,6 +153,43 @@ export default function App() {
             SOS — capture GPS
           </button>
           <p className="geo">{geoStatus}</p>
+
+          {gpsMissing && corridorId && (
+            <div className="gps-fallback">
+              <label>
+                Nearest KM marker stone (the green stone by the road)
+                <div className="km-stone-row">
+                  <div className="km-stone-preview" aria-hidden="true">
+                    <span className="km-stone-label">KM</span>
+                    <span className="km-stone-number">{kmMarker.trim() ? kmMarker : '—'}</span>
+                  </div>
+                  <input
+                    type="number"
+                    value={kmMarker}
+                    onChange={(e) => setKmMarker(e.target.value)}
+                    placeholder="e.g. 142"
+                    required
+                    min={0}
+                    step={0.1}
+                    inputMode="decimal"
+                  />
+                </div>
+                <p className="km-helper">
+                  Look for the green milestone stone on the roadside — it shows a number like 142.
+                </p>
+              </label>
+
+              <label>
+                Nearest landmark or town (optional)
+                <input
+                  type="text"
+                  value={landmark}
+                  onChange={(e) => setLandmark(e.target.value)}
+                  placeholder="e.g. Krishnagiri"
+                />
+              </label>
+            </div>
+          )}
 
           <label>
             Type
