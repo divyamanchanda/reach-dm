@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { apiUrl } from './api'
 
-const DEFAULT_CORRIDOR = import.meta.env.VITE_CORRIDOR_ID || ''
+const DEFAULT_CORRIDOR = String(import.meta.env.VITE_CORRIDOR_ID ?? '').trim()
 
 type CorridorOption = { id: string; name: string }
 
@@ -83,9 +83,50 @@ const SEVERITIES = [
 type Phase = 'landing' | 'form' | 'done'
 type LocState = 'pending' | 'ok' | 'fail'
 
+/** Full-width tap targets; native select controls are unreliable on many mobile browsers. */
+function HighwayButtonList({
+  corridors,
+  selectedId,
+  onSelect,
+  disabled,
+}: {
+  corridors: CorridorOption[]
+  selectedId: string
+  onSelect: (id: string) => void
+  disabled?: boolean
+}) {
+  if (!corridors.length) {
+    return (
+      <p className="sos-hw-empty">
+        {disabled ? 'Loading highways…' : 'No highways returned. Use “Reload highway list” above.'}
+      </p>
+    )
+  }
+  return (
+    <div className="sos-hw-list" role="group" aria-label="Choose highway">
+      {corridors.map((c) => (
+        <button
+          key={c.id}
+          type="button"
+          className={`sos-hw-item ${selectedId === c.id ? 'selected' : ''}`}
+          disabled={disabled}
+          onClick={() => onSelect(c.id)}
+        >
+          <span className="sos-hw-name">{c.name}</span>
+          {selectedId === c.id ? (
+            <span className="sos-hw-check" aria-hidden="true">
+              ✓
+            </span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
-  const corridorFromUrl = params.get('corridor') || ''
+  const corridorFromUrl = (params.get('corridor') || '').trim()
 
   const [phase, setPhase] = useState<Phase>('landing')
   const [corridorId, setCorridorId] = useState(corridorFromUrl || DEFAULT_CORRIDOR)
@@ -150,6 +191,13 @@ export default function App() {
       cancelled = true
     }
   }, [phase, corridorsRetryKey])
+
+  useEffect(() => {
+    if (phase !== 'form') return
+    if (!corridors.length || !corridorId) return
+    const ok = corridors.some((c) => c.id === corridorId)
+    if (!ok) setCorridorId('')
+  }, [phase, corridors, corridorId])
 
   useEffect(() => {
     if (phase !== 'form') return
@@ -333,25 +381,13 @@ export default function App() {
                     Reload highway list
                   </button>
                 )}
-                <label className="sos-select-label">
-                  Highway
-                  <select
-                    className="sos-select"
-                    value={corridorId}
-                    onChange={(e) => setCorridorId(e.target.value)}
-                    required={showManualLocation}
-                    disabled={corridorsLoading}
-                  >
-                    <option value="">
-                      {corridorsLoading ? 'Loading…' : 'Select highway…'}
-                    </option>
-                    {corridors.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <p className="sos-hw-prompt">Highway — tap the one you are on</p>
+                <HighwayButtonList
+                  corridors={corridors}
+                  selectedId={corridorId}
+                  onSelect={setCorridorId}
+                  disabled={corridorsLoading}
+                />
                 <label className="sos-km-label">
                   What number is on the nearest green milestone stone?
                   <input
@@ -380,25 +416,13 @@ export default function App() {
                     Reload highway list
                   </button>
                 )}
-                <label className="sos-select-label sos-select-tight">
-                  Which highway are you on?
-                  <select
-                    className="sos-select"
-                    value={corridorId}
-                    onChange={(e) => setCorridorId(e.target.value)}
-                    required
-                    disabled={corridorsLoading}
-                  >
-                    <option value="">
-                      {corridorsLoading ? 'Loading…' : 'Select highway…'}
-                    </option>
-                    {corridors.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <p className="sos-hw-prompt">Which highway are you on? Tap below.</p>
+                <HighwayButtonList
+                  corridors={corridors}
+                  selectedId={corridorId}
+                  onSelect={setCorridorId}
+                  disabled={corridorsLoading}
+                />
               </>
             )}
           </div>
