@@ -30,8 +30,10 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production-use-32chars-minimum!!"
     jwt_expires_in_days: int = 7
 
-    cors_origin: str = (
-        "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176"
+    # CORS. Railway/Vercel often set `CORS_ORIGINS`; we also accept `CORS_ORIGIN` for compatibility.
+    cors_origins_raw: str = Field(
+        default="http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176",
+        validation_alias=AliasChoices("CORS_ORIGINS", "CORS_ORIGIN"),
     )
 
     api_prefix: str = "/api"
@@ -53,7 +55,30 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [o.strip() for o in self.cors_origin.split(",") if o.strip()]
+        hardcoded_origin = "https://reach-dispatch.vercel.app"
+
+        raw = (self.cors_origins_raw or "").strip()
+        tokens = [o.strip() for o in raw.split(",") if o.strip()]
+
+        # Wildcard allow-all fallback.
+        if len(tokens) == 1 and tokens[0] == "*":
+            return ["*", hardcoded_origin]
+
+        # Otherwise, use the explicit list of origins (comma-separated) + the hardcoded Vercel dispatch origin.
+        origins: list[str] = []
+        seen: set[str] = set()
+        for o in [hardcoded_origin, *tokens]:
+            o = o.strip()
+            if not o:
+                continue
+            if o == "*":
+                # Only treat * as allow-all when it is the only value.
+                continue
+            if o in seen:
+                continue
+            seen.add(o)
+            origins.append(o)
+        return origins
 
 
 settings = Settings()
