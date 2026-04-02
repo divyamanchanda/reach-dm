@@ -1,7 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import './App.css'
-import { API, patchJson, login, fetchJson, type User } from './api'
+import { API, apiUrl, patchJson, login, fetchJson, type User } from './api'
+
+type DriverStep = 'accept' | 'en_route' | 'arrived' | 'clear'
+
+/** Which action is the current focus in the workflow (from server incident.status). */
+function activeStepFromIncidentStatus(status: string): DriverStep | null {
+  const s = status.toLowerCase()
+  if (['open', 'dispatched', 'verifying'].includes(s)) return 'accept'
+  if (s === 'accepted') return 'en_route'
+  if (s === 'en_route') return 'arrived'
+  if (s === 'on_scene') return 'clear'
+  return null
+}
+
+/** Whether this step is completed according to incident.status (after refresh or initial load). */
+function isStepCompleted(step: DriverStep, status: string): boolean {
+  const s = status.toLowerCase()
+  switch (step) {
+    case 'accept':
+      return ['accepted', 'en_route', 'on_scene', 'closed'].includes(s)
+    case 'en_route':
+      return ['en_route', 'on_scene', 'closed'].includes(s)
+    case 'arrived':
+      return ['on_scene', 'closed'].includes(s)
+    case 'clear':
+      return s === 'closed'
+    default:
+      return false
+  }
+}
 
 type MyVehicle = {
   id: string
@@ -210,29 +239,51 @@ export default function App() {
     void refreshIncident()
   }
 
-  const runStep = async (step: 'accept' | 'en_route' | 'arrived' | 'clear') => {
+  const runStep = async (step: DriverStep) => {
     if (!token || !vehicle || !incident || busy) return
     setBusy(true)
     setActionError(null)
     const vid = vehicle.id
     const iid = incident.id
+    const vehicleStatusUrl = apiUrl(`/vehicles/${vid}/status`)
+    const incidentStatusUrl = apiUrl(`/incidents/${iid}/status`)
+
     try {
       if (step === 'accept') {
+        // Backend: PATCH /api/incidents/{incident_id}/status — see backend/app/routers/incidents.py
+        console.log('[REACH driver] Accept', {
+          incident_id: iid,
+          vehicle_id: vid,
+          calls: [
+            { method: 'PATCH', url: vehicleStatusUrl, body: { status: 'en_route' } },
+            { method: 'PATCH', url: incidentStatusUrl, body: { status: 'accepted' } },
+          ],
+        })
         await patchJson(`/vehicles/${vid}/status`, token, { status: 'en_route' })
         await patchJson(`/incidents/${iid}/status`, token, { status: 'accepted' })
       } else if (step === 'en_route') {
+        console.log('[REACH driver] En Route', { incident_id: iid, url: incidentStatusUrl, body: { status: 'en_route' } })
         await patchJson(`/vehicles/${vid}/status`, token, { status: 'en_route' })
         await patchJson(`/incidents/${iid}/status`, token, { status: 'en_route' })
       } else if (step === 'arrived') {
+        console.log('[REACH driver] Arrived', { incident_id: iid, url: incidentStatusUrl, body: { status: 'on_scene' } })
         await patchJson(`/vehicles/${vid}/status`, token, { status: 'on_scene' })
         await patchJson(`/incidents/${iid}/status`, token, { status: 'on_scene' })
       } else {
+        console.log('[REACH driver] Clear', { incident_id: iid, url: incidentStatusUrl, body: { status: 'closed' } })
         await patchJson(`/incidents/${iid}/status`, token, { status: 'closed' })
         await patchJson(`/vehicles/${vid}/status`, token, { status: 'available' })
       }
       await refreshIncident()
     } catch (e: unknown) {
-      setActionError(e instanceof Error ? e.message : 'Update failed')
+      const msg =
+        e instanceof Error
+          ? e.message
+          : typeof e === 'string'
+            ? e
+            : `Update failed: ${String(e)}`
+      console.error('[REACH driver] Step failed', step, msg)
+      setActionError(msg)
     } finally {
       setBusy(false)
     }
@@ -323,20 +374,43 @@ export default function App() {
               {incident.notes?.trim() ? <p className="dc-notes">{incident.notes}</p> : null}
 
               <div className="dc-actions-row">
-                <button type="button" className="dc-act" disabled={busy} onClick={() => void runStep('accept')}>
-                  Accept
-                </button>
-                <button type="button" className="dc-act" disabled={busy} onClick={() => void runStep('en_route')}>
-                  En Route
-                </button>
-                <button type="button" className="dc-act" disabled={busy} onClick={() => void runStep('arrived')}>
-                  Arrived
-                </button>
-                <button type="button" className="dc-act" disabled={busy} onClick={() => void runStep('clear')}>
-                  Clear
-                </button>
+                {(
+                  [
+                    { step: 'accept' as const, label: 'Accept' },
+                    { step: 'en_route' as const, label: 'En Route' },
+                    { step: 'arrived' as const, label: 'Arrived' },
+                    { step: 'clear' as const, label: 'Clear' },
+                  ] as const
+                ).map(({ step, label }) => {
+                  const st = incident.status
+                  const active = activeStepFromIncidentStatus(st) === step
+                  const done = isStepCompleted(step, st)
+                  return (
+                    <button
+                      key={step}
+                      type="button"
+                      className={['dc-act', active && !done ? 'dc-act-active' : '', done ? 'dc-act-done' : '']
+                        .filter(Boolean)
+                        .join(' ')}
+                      disabled={busy}
+                      onClick={() => void runStep(step)}
+                      aria-current={active && !done ? 'step' : undefined}
+                    >
+                      {done ? (
+                        <span className="dc-act-check" aria-hidden>
+                          ✓{' '}
+                        </span>
+                      ) : null}
+                      {label}
+                    </button>
+                  )
+                })}
               </div>
-              {actionError && <p className="dc-err">{actionError}</p>}
+              {actionError && (
+                <p className="dc-err dc-action-err" role="alert">
+                  {actionError}
+                </p>
+              )}
             </article>
           ) : (
             <p className="dc-idle">Standing by — no incident assigned</p>

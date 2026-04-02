@@ -30,18 +30,34 @@ function authHeaders(token: string): HeadersInit {
   }
 }
 
-async function readErrorMessage(r: Response): Promise<string> {
-  const text = await r.text()
+function parseErrorBody(text: string, httpStatus: number): string {
+  const trimmed = text.trim()
+  if (!trimmed) return `HTTP ${httpStatus}`
   try {
-    const data = JSON.parse(text) as { detail?: unknown }
+    const data = JSON.parse(trimmed) as { detail?: unknown }
     const d = data.detail
     if (typeof d === 'string') return d
     if (Array.isArray(d))
-      return d.map((x: { msg?: string }) => x.msg).filter(Boolean).join(', ') || text
+      return d.map((x: { msg?: string }) => x.msg).filter(Boolean).join(', ') || trimmed
   } catch {
     /* plain text */
   }
-  return text || `HTTP ${r.status}`
+  return trimmed
+}
+
+async function readErrorMessage(r: Response): Promise<string> {
+  const text = await r.text()
+  return parseErrorBody(text, r.status)
+}
+
+function parseJsonSafe<T>(text: string): T {
+  const t = text.trim()
+  if (!t) return {} as T
+  try {
+    return JSON.parse(t) as T
+  } catch {
+    return {} as T
+  }
 }
 
 export type User = {
@@ -71,8 +87,9 @@ export async function fetchJson<T>(path: string, token: string): Promise<T> {
     headers: authHeaders(token),
     cache: 'no-store',
   })
-  if (!r.ok) throw new Error(await readErrorMessage(r))
-  return r.json()
+  const text = await r.text()
+  if (!r.ok) throw new Error(parseErrorBody(text, r.status))
+  return parseJsonSafe<T>(text)
 }
 
 export async function patchJson<T>(path: string, token: string, body: unknown): Promise<T> {
@@ -86,8 +103,9 @@ export async function patchJson<T>(path: string, token: string, body: unknown): 
     cache: 'no-store',
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(await readErrorMessage(r))
-  return r.json()
+  const text = await r.text()
+  if (!r.ok) throw new Error(parseErrorBody(text, r.status))
+  return parseJsonSafe<T>(text)
 }
 
 export async function postJson<T>(path: string, token: string, body: unknown): Promise<T> {
@@ -101,6 +119,7 @@ export async function postJson<T>(path: string, token: string, body: unknown): P
     cache: 'no-store',
     body: JSON.stringify(body),
   })
-  if (!r.ok) throw new Error(await readErrorMessage(r))
-  return r.json()
+  const text = await r.text()
+  if (!r.ok) throw new Error(parseErrorBody(text, r.status))
+  return parseJsonSafe<T>(text)
 }
