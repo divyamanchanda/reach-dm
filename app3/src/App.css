@@ -288,8 +288,22 @@
   gap: 0.5rem;
 }
 
+.dc-actions-row.dc-actions-single {
+  grid-template-columns: 1fr;
+  max-width: 22rem;
+  margin: 0 auto;
+}
+
+.dc-no-action {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #94a3b8;
+  text-align: center;
+  line-height: 1.4;
+}
+
 @media (min-width: 480px) {
-  .dc-actions-row {
+  .dc-actions-row:not(.dc-actions-single) {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
