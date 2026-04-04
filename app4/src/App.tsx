@@ -175,11 +175,12 @@ function trustLabel(score: number): string {
   return '🟢 High confidence'
 }
 
+/** Live highway SVG only — marker fill by vehicle.status */
 function ambulanceDiagramFill(status: string): string {
-  const s = status.toLowerCase()
-  if (s === 'available') return '#22c55e'
+  const s = status.toLowerCase().replace(/\s+/g, '_')
+  if (s === 'available' || s === 'idle') return '#22c55e'
   if (s === 'dispatched' || s === 'en_route') return '#f97316'
-  if (s === 'on_scene' || s === 'arrived') return '#ef4444'
+  if (s === 'on_scene') return '#ef4444'
   return '#64748b'
 }
 
@@ -700,13 +701,13 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
               🚑
             </text>
             <text
-              x={22}
-              y={5}
-              textAnchor="start"
-              fill="#cbd5e1"
+              x={0}
+              y={30}
+              textAnchor="middle"
+              fill="#e2e8f0"
               fontSize={10}
-              fontWeight={600}
-              style={{ textShadow: '0 1px 2px rgba(0,0,0,0.85)' }}
+              fontWeight={700}
+              style={{ textShadow: '0 1px 2px rgba(0,0,0,0.9)' }}
             >
               {v.label}
             </text>
