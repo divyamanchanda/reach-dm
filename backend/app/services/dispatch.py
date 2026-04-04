@@ -41,7 +41,7 @@ def run_dispatch(db: Session, *, incident_id: uuid.UUID, vehicle_id: uuid.UUID) 
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident or vehicle not found")
 
-    if inc_row["status"] in ("closed", "cancelled"):
+    if inc_row["status"] in ("closed", "cancelled", "recalled", "expired"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Incident not dispatchable")
     if veh_row["vehicle_type"] != "ambulance":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Vehicle is not an ambulance")

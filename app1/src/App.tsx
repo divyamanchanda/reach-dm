@@ -4,6 +4,16 @@ import { io, Socket } from 'socket.io-client'
 import './App.css'
 import { API, apiUrl, fetchJson, login, patchJson, postJson, type User } from './api'
 
+const DISPATCH_WINDOW_MS = 2 * 60 * 60 * 1000
+
+function isWithinDispatchWindow(createdAt: string): boolean {
+  const t = new Date(createdAt).getTime()
+  if (Number.isNaN(t)) return false
+  const ageMs = Date.now() - t
+  if (ageMs < 0) return false
+  return ageMs <= DISPATCH_WINDOW_MS
+}
+
 type Corridor = {
   id: string
   name: string
@@ -29,6 +39,7 @@ type Incident = {
   public_report_id: string | null
   created_at: string
   updated_at: string
+  eligible_for_reassign?: boolean
 }
 
 type Stats = {
@@ -118,6 +129,7 @@ function sortIncidentsByCreatedAtDesc(items: Incident[]): Incident[] {
 function statusLabel(status: string): string {
   if (status === 'confirmed_real') return 'Verified ✓'
   if (status === 'recalled') return 'Hoax — Recalled'
+  if (status === 'expired') return 'Expired'
   return status
 }
 
@@ -294,6 +306,14 @@ function App() {
 
   useEffect(() => {
     if (!token || !corridorId) return
+    const id = window.setInterval(() => {
+      refreshLists(corridorId, token).catch(() => {})
+    }, 30_000)
+    return () => window.clearInterval(id)
+  }, [token, corridorId, refreshLists])
+
+  useEffect(() => {
+    if (!token || !corridorId) return
     const s = io(API, {
       path: '/socket.io',
       auth: { token },
@@ -381,7 +401,9 @@ function App() {
   const dispatchIncident = async (incident: Incident) => {
     if (
       !token ||
-      ['dispatched', 'recalled', 'confirmed_real'].includes(incident.status) ||
+      ['dispatched', 'recalled', 'confirmed_real', 'expired'].includes(incident.status) ||
+      incident.eligible_for_reassign ||
+      !isWithinDispatchWindow(incident.created_at) ||
       dispatchingByIncidentId[incident.id]
     )
       return
@@ -440,6 +462,30 @@ function App() {
       const { line, hint } = humanizeDispatchFailure(e)
       setError(line)
       setErrorHint(hint)
+    } finally {
+      setDispatchingByIncidentId((prev) => ({ ...prev, [incident.id]: false }))
+    }
+  }
+
+  const reassignIncident = async (incident: Incident) => {
+    if (!token || !incident.eligible_for_reassign || dispatchingByIncidentId[incident.id]) return
+    setError(null)
+    setErrorHint(null)
+    setDispatchingByIncidentId((prev) => ({ ...prev, [incident.id]: true }))
+    try {
+      await patchJson(`/incidents/${incident.id}/reassign`, token, {})
+      setIncidents((prev) =>
+        prev.map((row) => (row.id === incident.id ? { ...row, status: 'dispatched' } : row)),
+      )
+      if (corridorId) await refreshLists(corridorId, token)
+      if (selectedId === incident.id) {
+        fetchJson<IncidentDetail>(`/incidents/${incident.id}`, token)
+          .then(setIncidentDetail)
+          .catch(() => {})
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Reassign failed')
+      setErrorHint(null)
     } finally {
       setDispatchingByIncidentId((prev) => ({ ...prev, [incident.id]: false }))
     }
@@ -614,31 +660,63 @@ function App() {
                 <p className="recall-msg">Ambulance recalled — hoax confirmed</p>
               ) : i.status === 'confirmed_real' ? (
                 <p className="confirm-msg">Incident verified as real ✓</p>
+              ) : i.status === 'expired' ||
+                (['open', 'verifying', 'confirmed_real'].includes(i.status) && !isWithinDispatchWindow(i.created_at)) ? (
+                <span className="expired-badge" title="Incidents in the queue for more than 2 hours are expired">
+                  Expired
+                </span>
               ) : i.status === 'dispatched' ? (
-                <div className="card-dispatch-actions">
-                  <button
-                    type="button"
-                    className="dispatch-btn confirm-btn"
-                    disabled={!!dispatchingByIncidentId[i.id]}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void confirmRealIncident(i)
-                    }}
-                  >
-                    Confirmed Real ✓
-                  </button>
-                  <button
-                    type="button"
-                    className="dispatch-btn recall-btn"
-                    disabled={!!dispatchingByIncidentId[i.id]}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void recallIncident(i)
-                    }}
-                  >
-                    Hoax — Recall ✗
-                  </button>
+                <div className="card-dispatch-actions card-dispatch-stack">
+                  <div className="card-dispatch-actions">
+                    <button
+                      type="button"
+                      className="dispatch-btn confirm-btn"
+                      disabled={!!dispatchingByIncidentId[i.id]}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void confirmRealIncident(i)
+                      }}
+                    >
+                      Confirmed Real ✓
+                    </button>
+                    <button
+                      type="button"
+                      className="dispatch-btn recall-btn"
+                      disabled={!!dispatchingByIncidentId[i.id]}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void recallIncident(i)
+                      }}
+                    >
+                      Hoax — Recall ✗
+                    </button>
+                  </div>
+                  {i.eligible_for_reassign ? (
+                    <button
+                      type="button"
+                      className="dispatch-btn reassign-btn"
+                      disabled={!!dispatchingByIncidentId[i.id]}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void reassignIncident(i)
+                      }}
+                    >
+                      {dispatchingByIncidentId[i.id] ? 'Reassigning...' : 'Reassign'}
+                    </button>
+                  ) : null}
                 </div>
+              ) : i.eligible_for_reassign ? (
+                <button
+                  type="button"
+                  className="dispatch-btn reassign-btn card-dispatch-btn"
+                  disabled={!!dispatchingByIncidentId[i.id]}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void reassignIncident(i)
+                  }}
+                >
+                  {dispatchingByIncidentId[i.id] ? 'Reassigning...' : 'Reassign'}
+                </button>
               ) : (
                 <button
                   type="button"
@@ -783,25 +861,50 @@ function App() {
                 <p className="recall-msg">Ambulance recalled — hoax confirmed</p>
               ) : selected.status === 'confirmed_real' ? (
                 <p className="confirm-msg">Incident verified as real ✓</p>
+              ) : selected.status === 'expired' ||
+                (['open', 'verifying', 'confirmed_real'].includes(selected.status) &&
+                  !isWithinDispatchWindow(selected.created_at)) ? (
+                <span className="expired-badge">Expired</span>
               ) : selected.status === 'dispatched' ? (
-                <div className="card-dispatch-actions">
-                  <button
-                    type="button"
-                    className="dispatch-btn confirm-btn"
-                    disabled={!!dispatchingByIncidentId[selected.id]}
-                    onClick={() => void confirmRealIncident(selected)}
-                  >
-                    Confirmed Real ✓
-                  </button>
-                  <button
-                    type="button"
-                    className="dispatch-btn recall-btn"
-                    disabled={!!dispatchingByIncidentId[selected.id]}
-                    onClick={() => void recallIncident(selected)}
-                  >
-                    Hoax — Recall ✗
-                  </button>
+                <div className="card-dispatch-actions card-dispatch-stack">
+                  <div className="card-dispatch-actions">
+                    <button
+                      type="button"
+                      className="dispatch-btn confirm-btn"
+                      disabled={!!dispatchingByIncidentId[selected.id]}
+                      onClick={() => void confirmRealIncident(selected)}
+                    >
+                      Confirmed Real ✓
+                    </button>
+                    <button
+                      type="button"
+                      className="dispatch-btn recall-btn"
+                      disabled={!!dispatchingByIncidentId[selected.id]}
+                      onClick={() => void recallIncident(selected)}
+                    >
+                      Hoax — Recall ✗
+                    </button>
+                  </div>
+                  {selected.eligible_for_reassign ? (
+                    <button
+                      type="button"
+                      className="dispatch-btn reassign-btn"
+                      disabled={!!dispatchingByIncidentId[selected.id]}
+                      onClick={() => void reassignIncident(selected)}
+                    >
+                      {dispatchingByIncidentId[selected.id] ? 'Reassigning...' : 'Reassign'}
+                    </button>
+                  ) : null}
                 </div>
+              ) : selected.eligible_for_reassign ? (
+                <button
+                  type="button"
+                  className="dispatch-btn reassign-btn"
+                  disabled={!!dispatchingByIncidentId[selected.id]}
+                  onClick={() => void reassignIncident(selected)}
+                >
+                  {dispatchingByIncidentId[selected.id] ? 'Reassigning...' : 'Reassign'}
+                </button>
               ) : (
                 <button
                   type="button"

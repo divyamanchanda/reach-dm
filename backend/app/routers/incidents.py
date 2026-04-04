@@ -12,6 +12,7 @@ from app.models import Incident, IncidentEvent, User
 from app.schemas import DispatchBody, IncidentDetailOut, IncidentStatusBody, IncidentVerifyBody, NearbyVehicleOut, TimelineEventOut
 from app.security import get_current_user, require_role
 from app.services.dispatch import run_dispatch
+from app.services.incident_lifecycle import driver_decline_incident, reassign_incident
 from app.services.public_incident import list_nearby_ambulances
 from app.socket_server import emit_to_corridor
 
@@ -109,6 +110,56 @@ def dispatch_incident(
     }
     background_tasks.add_task(_push_dispatched, cid, payload)
     background_tasks.add_task(_push_corridor_stats, cid)
+    return {"ok": True, "dispatch_id": str(dispatch.id)}
+
+
+@router.post("/{incident_id}/decline")
+def decline_incident(
+    incident_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("driver")),
+):
+    try:
+        driver_decline_incident(db, user, incident_id)
+    except ValueError as e:
+        msg = str(e)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=msg) from e
+        if "not assigned" in msg.lower() or "not dispatched" in msg.lower():
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=msg) from e
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=msg) from e
+    inc = db.get(Incident, incident_id)
+    if inc:
+        background_tasks.add_task(_push_incident_updated, inc.corridor_id, {"incident_id": str(incident_id)})
+        background_tasks.add_task(_push_corridor_stats, inc.corridor_id)
+    return {"ok": True}
+
+
+@router.patch("/{incident_id}/reassign")
+def patch_reassign_incident(
+    incident_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("dispatch_operator")),
+):
+    try:
+        dispatch = reassign_incident(db, incident_id)
+    except ValueError as e:
+        msg = str(e)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=msg) from e
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=msg) from e
+    inc = db.get(Incident, incident_id)
+    cid = inc.corridor_id if inc else None
+    if cid:
+        payload = {
+            "incident_id": str(incident_id),
+            "vehicle_id": str(dispatch.vehicle_id),
+            "dispatch_id": str(dispatch.id),
+        }
+        background_tasks.add_task(_push_dispatched, cid, payload)
+        background_tasks.add_task(_push_corridor_stats, cid)
     return {"ok": True, "dispatch_id": str(dispatch.id)}
 
 

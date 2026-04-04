@@ -175,6 +175,14 @@ function trustLabel(score: number): string {
   return '🟢 High confidence'
 }
 
+function ambulanceDiagramFill(status: string): string {
+  const s = status.toLowerCase()
+  if (s === 'available') return '#22c55e'
+  if (s === 'dispatched' || s === 'en_route') return '#f97316'
+  if (s === 'on_scene' || s === 'arrived') return '#ef4444'
+  return '#64748b'
+}
+
 function vehicleStatusLabel(status: string): string {
   const s = status.toLowerCase().replace(/_/g, ' ')
   if (s === 'available') return 'idle'
@@ -681,9 +689,26 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
             <title>
               {`${v.label} · ${vehicleStatusLabel(v.status)} · KM ${km.toFixed(0)} · Assigned: ${v.assigned_incident_id ?? '—'}`}
             </title>
-            <circle r={18} fill="rgba(15,23,42,0.9)" stroke="#64748b" strokeWidth={1.5} />
+            <circle
+              r={18}
+              fill={ambulanceDiagramFill(v.status)}
+              stroke="#0f172a"
+              strokeWidth={1.5}
+              opacity={0.95}
+            />
             <text x={0} y={6} textAnchor="middle" fontSize={16}>
               🚑
+            </text>
+            <text
+              x={22}
+              y={5}
+              textAnchor="start"
+              fill="#cbd5e1"
+              fontSize={10}
+              fontWeight={600}
+              style={{ textShadow: '0 1px 2px rgba(0,0,0,0.85)' }}
+            >
+              {v.label}
             </text>
           </g>
         ))}

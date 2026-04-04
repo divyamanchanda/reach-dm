@@ -224,6 +224,26 @@
   cursor: not-allowed;
 }
 
+.sun-actions-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  align-items: stretch;
+}
+
+.sun-actions-row .sun-action {
+  margin-top: 0;
+  min-height: 56px;
+  font-size: 17px;
+}
+
+.sun-action-decline {
+  background: #b91c1c !important;
+  border-color: #7f1d1d !important;
+  box-shadow: 0 4px 0 #7f1d1d !important;
+}
+
 .sun-action[data-step='accept'] {
   background: #2563eb;
   border-color: #1e40af;

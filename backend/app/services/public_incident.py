@@ -181,7 +181,12 @@ def create_public_incident_row(
     )
 
 
-def list_nearby_ambulances(db: Session, incident_id: uuid.UUID, limit: int = 20) -> list[NearbyVehicleOut]:
+def list_nearby_ambulances(
+    db: Session,
+    incident_id: uuid.UUID,
+    limit: int = 20,
+    exclude_vehicle_ids: set[uuid.UUID] | None = None,
+) -> list[NearbyVehicleOut]:
     row = db.execute(
         text(
             """
@@ -194,6 +199,13 @@ def list_nearby_ambulances(db: Session, incident_id: uuid.UUID, limit: int = 20)
         return []
     lng, lat = float(row[0]), float(row[1])
     dist_sql = _HAVERSINE_M.format(tbl="v")
+    excl = exclude_vehicle_ids or set()
+    excl_sql = ""
+    params: dict = {"ilng": lng, "ilat": lat, "lim": limit}
+    if excl:
+        excl_sql = "AND v.id NOT IN (" + ", ".join(f":e{i}" for i in range(len(excl))) + ")"
+        for i, uid in enumerate(excl):
+            params[f"e{i}"] = str(uid)
     rows = db.execute(
         text(
             f"""
@@ -207,11 +219,12 @@ def list_nearby_ambulances(db: Session, incident_id: uuid.UUID, limit: int = 20)
               AND v.is_available = true
               AND v.status = 'available'
               AND v.lat IS NOT NULL AND v.lng IS NOT NULL
+              {excl_sql}
             {NEARBY_VEHICLE_ORDER_BY}
             LIMIT :lim
             """
         ),
-        {"ilng": lng, "ilat": lat, "lim": limit},
+        params,
     ).mappings().all()
     vehicles_for_routing = [{"lng": float(r["lng"]), "lat": float(r["lat"])} for r in rows]
     durations, routed_distances = _fetch_osrm_durations_and_distances(lng, lat, vehicles_for_routing)

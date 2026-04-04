@@ -20,6 +20,7 @@ from app.schemas import (
 )
 from app.security import get_current_user
 from app.services.public_incident import create_public_incident_row
+from app.services.incident_lifecycle import expire_stale_open_incidents, incident_eligible_for_operator_reassign
 from app.routers.incidents import _push_corridor_stats, _push_incident_new
 
 router = APIRouter(prefix="/corridors", tags=["corridors"])
@@ -94,6 +95,7 @@ def list_incidents(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    expire_stale_open_incidents(db)
     q = (
         select(Incident, Incident.lat.label("lat"), Incident.lng.label("lng"))
         .where(Incident.corridor_id == corridor_id)
@@ -102,6 +104,7 @@ def list_incidents(
     rows = db.execute(q).all()
     items: list[IncidentListItem] = []
     for inc, lat, lng in rows:
+        eligible = incident_eligible_for_operator_reassign(db, inc.id)
         items.append(
             IncidentListItem(
                 id=inc.id,
@@ -119,6 +122,7 @@ def list_incidents(
                 public_report_id=inc.public_report_id,
                 created_at=inc.created_at,
                 updated_at=inc.updated_at,
+                eligible_for_reassign=eligible,
             )
         )
     items.sort(key=lambda x: x.created_at, reverse=True)

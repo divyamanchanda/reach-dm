@@ -71,6 +71,7 @@ class IncidentListItem(BaseModel):
     public_report_id: str | None = None
     created_at: datetime
     updated_at: datetime
+    eligible_for_reassign: bool = False
 
 
 class TimelineEventOut(BaseModel):

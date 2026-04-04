@@ -387,6 +387,29 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+.expired-badge {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  background: #1e293b;
+  border: 1px solid #475569;
+  border-radius: 999px;
+}
+
+.reassign-btn {
+  background: #7c3aed;
+}
+
+.card-dispatch-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

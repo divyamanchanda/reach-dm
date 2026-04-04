@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import './App.css'
-import { API, patchJson, login, fetchJson, type User } from './api'
+import { API, patchJson, postJson, login, fetchJson, type User } from './api'
 
 type DriverStep = 'accept' | 'en_route' | 'arrived' | 'clear'
 
@@ -406,15 +406,27 @@ export default function App() {
                   KM <strong>{incident.km_marker ?? '—'}</strong>
                 </p>
                 {nextStep ? (
-                  <button
-                    type="button"
-                    className="sun-action"
-                    data-step={nextStep}
-                    disabled={busy}
-                    onClick={() => void runStep(nextStep)}
-                  >
-                    {STEP_LABEL[nextStep]}
-                  </button>
+                  <div className="sun-actions-row">
+                    <button
+                      type="button"
+                      className="sun-action"
+                      data-step={nextStep}
+                      disabled={busy}
+                      onClick={() => void runStep(nextStep)}
+                    >
+                      {STEP_LABEL[nextStep]}
+                    </button>
+                    {nextStep === 'accept' ? (
+                      <button
+                        type="button"
+                        className="sun-action sun-action-decline"
+                        disabled={busy}
+                        onClick={() => void cannotRespond()}
+                      >
+                        CANNOT RESPOND
+                      </button>
+                    ) : null}
+                  </div>
                 ) : (
                   <p className="sun-cleared">Incident cleared.</p>
                 )}
