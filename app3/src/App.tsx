@@ -1,31 +1,47 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import './App.css'
-import { API, apiUrl, patchJson, login, fetchJson, type User } from './api'
+import { API, patchJson, login, fetchJson, type User } from './api'
 
 type DriverStep = 'accept' | 'en_route' | 'arrived' | 'clear'
 
-const STEP_LABEL: Record<DriverStep, string> = {
-  accept: 'Accept',
-  en_route: 'En Route',
-  arrived: 'Arrived',
-  clear: 'Clear',
+type MyVehicle = {
+  id: string
+  corridor_id: string
+  corridor_name: string
+  label: string
+  status: string
+  vehicle_type: string
 }
 
-/**
- * Single visible action for the workflow (one button at a time).
- * Accept → open | dispatched · En Route → accepted · Arrived → en_route · Clear → arrived (or legacy on_scene).
- */
-function currentStepForStatus(status: string): DriverStep | null {
-  const s = status.toLowerCase()
-  if (s === 'open' || s === 'dispatched') return 'accept'
+type IncidentDetail = {
+  id: string
+  corridor_id: string
+  incident_type: string
+  severity: string
+  km_marker: number | null
+  trust_score: number
+  status: string
+  created_at: string
+}
+
+type HistoryRow = {
+  id: string
+  incident_type: string
+  status: string
+  created_at: string
+}
+
+function currentStepForStatus(status: string | undefined | null): DriverStep | null {
+  if (status == null || String(status).trim() === '') return null
+  const s = String(status).toLowerCase()
+  if (s === 'closed' || s === 'cancelled' || s === 'recalled') return null
   if (s === 'accepted') return 'en_route'
   if (s === 'en_route') return 'arrived'
   if (s === 'arrived' || s === 'on_scene') return 'clear'
-  return null
+  return 'accept'
 }
 
-/** Optimistic incident.status after each successful action (matches PATCH bodies below). */
 function incidentStatusAfterStep(step: DriverStep): string {
   switch (step) {
     case 'accept':
@@ -55,36 +71,11 @@ function vehicleStatusAfterStep(step: DriverStep): string {
   }
 }
 
-type MyVehicle = {
-  id: string
-  corridor_id: string
-  corridor_name: string
-  label: string
-  status: string
-  vehicle_type: string
-}
-
-type IncidentDetail = {
-  id: string
-  corridor_id: string
-  incident_type: string
-  severity: string
-  km_marker: number | null
-  latitude: number | null
-  longitude: number | null
-  trust_score: number
-  trust_recommendation: string | null
-  status: string
-  injured_count: number
-  notes: string | null
-  created_at: string
-  timeline: { id: string; event_type: string; payload: Record<string, unknown> | null; created_at: string }[]
-}
-
-function trustLabel(score: number): string {
-  if (score >= 72) return 'High confidence'
-  if (score >= 45) return 'Partially verified'
-  return 'Unverified'
+const STEP_LABEL: Record<DriverStep, string> = {
+  accept: 'ACCEPT',
+  en_route: 'EN ROUTE',
+  arrived: 'ARRIVED',
+  clear: 'CLEAR',
 }
 
 export default function App() {
@@ -105,15 +96,13 @@ export default function App() {
 
   const [vehicle, setVehicle] = useState<MyVehicle | null>(null)
   const [vehicleLoadError, setVehicleLoadError] = useState<string | null>(null)
-
   const [incident, setIncident] = useState<IncidentDetail | null>(null)
+  const [history, setHistory] = useState<HistoryRow[]>([])
   const [hoaxFullScreen, setHoaxFullScreen] = useState(false)
   const [busy, setBusy] = useState(false)
-
-  const [gpsLost, setGpsLost] = useState(false)
+  const [gpsOk, setGpsOk] = useState(true)
   const hadLocationSuccess = useRef(false)
 
-  /** Loads the active incident from the API and updates state. Throws on network/API failure. */
   const loadIncidentFromServer = useCallback(async (): Promise<IncidentDetail | null> => {
     if (!token || !vehicle) return null
     const rows = await fetchJson<IncidentDetail[]>(`/vehicles/${vehicle.id}/incidents`, token)
@@ -133,8 +122,7 @@ export default function App() {
     return top
   }, [token, vehicle])
 
-  /** Polling / socket: swallow errors so a blip does not clear the UI. */
-  const refreshIncident = useCallback(async (): Promise<IncidentDetail | null> => {
+  const refreshIncident = useCallback(async () => {
     try {
       return await loadIncidentFromServer()
     } catch {
@@ -142,11 +130,22 @@ export default function App() {
     }
   }, [loadIncidentFromServer])
 
+  const loadHistory = useCallback(async () => {
+    if (!token || !vehicle) return
+    try {
+      const rows = await fetchJson<HistoryRow[]>(`/vehicles/${vehicle.id}/incidents/history?limit=10`, token)
+      setHistory(Array.isArray(rows) ? rows : [])
+    } catch {
+      setHistory([])
+    }
+  }, [token, vehicle])
+
   useEffect(() => {
     if (!token) {
       setVehicle(null)
       setVehicleLoadError(null)
       setIncident(null)
+      setHistory([])
       setHoaxFullScreen(false)
       return
     }
@@ -157,9 +156,7 @@ export default function App() {
         if (cancelled) return
         if (mine.length === 0) {
           setVehicle(null)
-          setVehicleLoadError(
-            'No vehicle is assigned to your account. Ask dispatch to link your login to an ambulance.',
-          )
+          setVehicleLoadError('No vehicle assigned. Contact dispatch.')
           return
         }
         const chosen = [...mine].sort((a, b) => a.label.localeCompare(b.label))[0]
@@ -169,9 +166,7 @@ export default function App() {
         if (cancelled) return
         const msg = e instanceof Error ? e.message : 'Could not load vehicle'
         setVehicle(null)
-        setVehicleLoadError(
-          /403|forbidden/i.test(msg) ? 'Driver access only. Sign in with a driver account.' : msg,
-        )
+        setVehicleLoadError(/403|forbidden/i.test(msg) ? 'Driver login required.' : msg)
       }
     })()
     return () => {
@@ -181,10 +176,14 @@ export default function App() {
 
   useEffect(() => {
     if (!token || !vehicle) return
-    void refreshIncident()
-    const id = window.setInterval(() => void refreshIncident(), 5000)
+    void loadIncidentFromServer()
+    void loadHistory()
+    const id = window.setInterval(() => {
+      void refreshIncident()
+      void loadHistory()
+    }, 5000)
     return () => window.clearInterval(id)
-  }, [token, vehicle, refreshIncident])
+  }, [token, vehicle, loadIncidentFromServer, refreshIncident, loadHistory])
 
   useEffect(() => {
     if (!token || !vehicle) return
@@ -194,7 +193,10 @@ export default function App() {
       transports: ['websocket', 'polling'],
     })
     s.on('connect', () => s.emit('subscribe_corridor', { corridor_id: vehicle.corridor_id }))
-    const bump = () => void refreshIncident()
+    const bump = () => {
+      void refreshIncident()
+      void loadHistory()
+    }
     s.on('incident:dispatched', bump)
     s.on('incident:updated', bump)
     s.on('incident:recalled', bump)
@@ -202,30 +204,28 @@ export default function App() {
       s.emit('unsubscribe_corridor', { corridor_id: vehicle.corridor_id })
       s.disconnect()
     }
-  }, [token, vehicle, refreshIncident])
+  }, [token, vehicle, refreshIncident, loadHistory])
 
   useEffect(() => {
     if (!token || !vehicle?.id) return
     if (!navigator.geolocation) {
-      setGpsLost(true)
+      setGpsOk(false)
       return
     }
 
     const postLocation = (lat: number, lng: number) => {
-      void patchJson(`/vehicles/${vehicle.id}/location`, token, { latitude: lat, longitude: lng }).catch(() => {
-        /* network / server — not necessarily GPS drop */
-      })
+      void patchJson(`/vehicles/${vehicle.id}/location`, token, { latitude: lat, longitude: lng }).catch(() => {})
     }
 
     const tick = () => {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           hadLocationSuccess.current = true
-          setGpsLost(false)
+          setGpsOk(true)
           postLocation(pos.coords.latitude, pos.coords.longitude)
         },
         () => {
-          if (hadLocationSuccess.current) setGpsLost(true)
+          if (hadLocationSuccess.current) setGpsOk(false)
         },
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 12_000 },
       )
@@ -236,7 +236,7 @@ export default function App() {
     return () => window.clearInterval(interval)
   }, [token, vehicle])
 
-  const driverDisplayName = useMemo(() => user?.full_name?.trim() || user?.phone || 'Driver', [user])
+  const driverLine = useMemo(() => user?.full_name?.trim() || user?.phone || 'Driver', [user])
 
   const submitLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -259,79 +259,54 @@ export default function App() {
     setUser(null)
     setVehicle(null)
     setIncident(null)
+    setHistory([])
     setHoaxFullScreen(false)
     hadLocationSuccess.current = false
-    setGpsLost(false)
+    setGpsOk(true)
   }
 
-  const dismissHoaxOverlay = () => {
+  const dismissHoax = () => {
     setHoaxFullScreen(false)
     void refreshIncident()
   }
 
   const runStep = async (step: DriverStep) => {
     if (!token || !vehicle || !incident || busy) return
-    if (currentStepForStatus(incident.status) !== step) return
-
     setBusy(true)
     setActionError(null)
     const vid = vehicle.id
     const iid = incident.id
-    const vehicleStatusUrl = apiUrl(`/vehicles/${vid}/status`)
-    const incidentStatusUrl = apiUrl(`/incidents/${iid}/status`)
-
     const prevIncident = incident
     const prevVehicle = vehicle
 
-    const nextIncStatus = incidentStatusAfterStep(step)
-    const nextVehStatus = vehicleStatusAfterStep(step)
-    setIncident({ ...incident, status: nextIncStatus })
-    setVehicle({ ...vehicle, status: nextVehStatus })
+    setIncident({ ...incident, status: incidentStatusAfterStep(step) })
+    setVehicle({ ...vehicle, status: vehicleStatusAfterStep(step) })
 
     try {
       if (step === 'accept') {
-        console.log('[REACH driver] Accept', {
-          incident_id: iid,
-          vehicle_id: vid,
-          calls: [
-            { method: 'PATCH', url: vehicleStatusUrl, body: { status: 'en_route' } },
-            { method: 'PATCH', url: incidentStatusUrl, body: { status: 'accepted' } },
-          ],
-        })
         await patchJson(`/vehicles/${vid}/status`, token, { status: 'en_route' })
         await patchJson(`/incidents/${iid}/status`, token, { status: 'accepted' })
       } else if (step === 'en_route') {
-        console.log('[REACH driver] En Route', { incident_id: iid, url: incidentStatusUrl, body: { status: 'en_route' } })
         await patchJson(`/vehicles/${vid}/status`, token, { status: 'en_route' })
         await patchJson(`/incidents/${iid}/status`, token, { status: 'en_route' })
       } else if (step === 'arrived') {
-        console.log('[REACH driver] Arrived', { incident_id: iid, url: incidentStatusUrl, body: { status: 'arrived' } })
         await patchJson(`/vehicles/${vid}/status`, token, { status: 'on_scene' })
         await patchJson(`/incidents/${iid}/status`, token, { status: 'arrived' })
       } else {
-        console.log('[REACH driver] Clear', { incident_id: iid, url: incidentStatusUrl, body: { status: 'closed' } })
         await patchJson(`/incidents/${iid}/status`, token, { status: 'closed' })
         await patchJson(`/vehicles/${vid}/status`, token, { status: 'available' })
       }
-
       try {
         await loadIncidentFromServer()
+        await loadHistory()
       } catch (reErr: unknown) {
-        console.error('[REACH driver] Post-update refresh failed', reErr)
         const reMsg = reErr instanceof Error ? reErr.message : String(reErr)
-        setActionError(`Status saved, but reload failed: ${reMsg}`)
+        setActionError(`Saved. Reload issue: ${reMsg}`)
       }
     } catch (e: unknown) {
       setIncident(prevIncident)
       setVehicle(prevVehicle)
-      const msg =
-        e instanceof Error
-          ? e.message
-          : typeof e === 'string'
-            ? e
-            : `Update failed: ${String(e)}`
-      console.error('[REACH driver] Step failed', step, msg)
-      setActionError(msg)
+      setActionError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
@@ -339,11 +314,10 @@ export default function App() {
 
   if (hoaxFullScreen) {
     return (
-      <div className="dc-hoax-overlay" role="alert">
-        <div className="dc-hoax-inner">
-          <p className="dc-hoax-title">THIS IS A HOAX — Stand Down</p>
-          <p className="dc-hoax-sub">Do not proceed to the scene. Return to base and await instructions.</p>
-          <button type="button" className="dc-hoax-dismiss" onClick={dismissHoaxOverlay}>
+      <div className="sun-standdown" role="alert">
+        <div className="sun-standdown-inner">
+          <p className="sun-standdown-title">STAND DOWN — HOAX REPORTED. Return to base.</p>
+          <button type="button" className="sun-standdown-btn" onClick={dismissHoax}>
             Acknowledge
           </button>
         </div>
@@ -353,112 +327,116 @@ export default function App() {
 
   if (!token || !user) {
     return (
-      <div className="dc-app">
-        <main className="dc-login">
-          <h1 className="dc-brand">REACH Driver</h1>
-          <form className="dc-card" onSubmit={(e) => void submitLogin(e)}>
-            <label className="dc-field">
-              <span>Phone</span>
-              <input value={phone} onChange={(e) => setPhone(e.target.value)} autoComplete="username" inputMode="tel" />
-            </label>
-            <label className="dc-field">
-              <span>Password</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="current-password"
-              />
-            </label>
-            {loginError && <p className="dc-err">{loginError}</p>}
-            <button type="submit" className="dc-btn dc-btn-primary">
-              Sign in
-            </button>
-          </form>
-        </main>
+      <div className="sun-app sun-login">
+        <h1 className="sun-h1">REACH Driver</h1>
+        <form className="sun-form" onSubmit={(e) => void submitLogin(e)}>
+          <label className="sun-label">
+            Phone
+            <input
+              className="sun-input"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              autoComplete="username"
+              inputMode="tel"
+            />
+          </label>
+          <label className="sun-label">
+            Password
+            <input
+              className="sun-input"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+            />
+          </label>
+          {loginError && <p className="sun-err">{loginError}</p>}
+          <button type="submit" className="sun-btn sun-btn-login">
+            LOGIN
+          </button>
+        </form>
       </div>
     )
   }
 
+  const nextStep = incident ? currentStepForStatus(incident.status) : null
+
   return (
-    <div className="dc-app">
-      <header className="dc-topbar">
-        <div className="dc-topbar-text">
-          <p className="dc-driver-name">{driverDisplayName}</p>
-          {vehicle && (
-            <>
-              <p className="dc-meta">
-                <span className="dc-meta-label">Vehicle</span> {vehicle.label}
-              </p>
-              <p className="dc-meta">
-                <span className="dc-meta-label">Corridor</span> {vehicle.corridor_name}
-              </p>
-            </>
-          )}
-        </div>
-        <button type="button" className="dc-btn-logout" onClick={logout}>
-          Log out
-        </button>
+    <div className="sun-app">
+      <div className={`sun-gps ${gpsOk ? 'sun-gps-on' : 'sun-gps-lost'}`} role="status">
+        {gpsOk ? 'GPS ON' : 'GPS LOST'}
+      </div>
+
+      <header className="sun-header">
+        <p className="sun-driver">{driverLine}</p>
+        {vehicle && <p className="sun-vehicle">{vehicle.label}</p>}
       </header>
 
-      {gpsLost && (
-        <div className="dc-gps-banner" role="status">
-          GPS SIGNAL LOST
-        </div>
-      )}
-
-      {vehicleLoadError && <p className="dc-banner dc-banner-warn">{vehicleLoadError}</p>}
+      {vehicleLoadError && <p className="sun-banner-warn">{vehicleLoadError}</p>}
 
       {vehicle && !vehicleLoadError && (
-        <main className="dc-main">
-          {incident ? (
-            <article className="dc-incident-card">
-              <h2 className="dc-incident-type">{incident.incident_type}</h2>
-              <p className={`dc-sev dc-sev-${incident.severity}`}>{incident.severity}</p>
-              <p className="dc-km">
-                KM <strong>{incident.km_marker ?? '—'}</strong>
-              </p>
-              <p className="dc-trust">{trustLabel(incident.trust_score)}</p>
-              {incident.notes?.trim() ? <p className="dc-notes">{incident.notes}</p> : null}
-
-              <div className="dc-actions-row dc-actions-single">
-                {(() => {
-                  const step = currentStepForStatus(incident.status)
-                  if (!step) {
-                    const st = incident.status.toLowerCase()
-                    if (st === 'closed') {
-                      return <p className="dc-idle">Incident cleared.</p>
-                    }
-                    return (
-                      <p className="dc-no-action">
-                        Status: <strong>{incident.status}</strong> — no action for this state.
-                      </p>
-                    )
-                  }
-                  return (
-                    <button
-                      type="button"
-                      className="dc-act dc-act-active"
-                      disabled={busy}
-                      onClick={() => void runStep(step)}
-                      aria-current="step"
-                    >
-                      {STEP_LABEL[step]}
-                    </button>
-                  )
-                })()}
-              </div>
-              {actionError && (
-                <p className="dc-err dc-action-err" role="alert">
-                  {actionError}
+        <main className="sun-main">
+          <section className="sun-section" aria-labelledby="assign-heading">
+            <h2 id="assign-heading" className="sun-section-title">
+              CURRENT ASSIGNMENT
+            </h2>
+            {incident ? (
+              <>
+                <p className="sun-type">{incident.incident_type.toUpperCase()}</p>
+                <p
+                  className={`sun-sev sun-sev-${['critical', 'major', 'minor'].includes(incident.severity.toLowerCase()) ? incident.severity.toLowerCase() : 'major'}`}
+                >
+                  {incident.severity.toUpperCase()}
                 </p>
-              )}
-            </article>
-          ) : (
-            <p className="dc-idle">Standing by — no incident assigned</p>
-          )}
+                <p className="sun-km">
+                  KM <strong>{incident.km_marker ?? '—'}</strong>
+                </p>
+                {nextStep ? (
+                  <button
+                    type="button"
+                    className="sun-action"
+                    data-step={nextStep}
+                    disabled={busy}
+                    onClick={() => void runStep(nextStep)}
+                  >
+                    {STEP_LABEL[nextStep]}
+                  </button>
+                ) : (
+                  <p className="sun-cleared">Incident cleared.</p>
+                )}
+                {actionError && <p className="sun-err">{actionError}</p>}
+              </>
+            ) : (
+              <p className="sun-standby">STANDING BY</p>
+            )}
+          </section>
+
+          <section className="sun-section sun-history" aria-labelledby="hist-heading">
+            <h2 id="hist-heading" className="sun-section-title">
+              INCIDENT HISTORY
+            </h2>
+            {history.length === 0 ? (
+              <p className="sun-hist-empty">No history yet.</p>
+            ) : (
+              <ul className="sun-hist-list">
+                {history.map((h) => (
+                  <li key={h.id} className="sun-hist-row">
+                    <span className="sun-hist-type">{h.incident_type}</span>
+                    <span className="sun-hist-date">{new Date(h.created_at).toLocaleString()}</span>
+                    <span className="sun-hist-st">{h.status}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
         </main>
       )}
+
+      <footer className="sun-footer">
+        <button type="button" className="sun-logout" onClick={logout}>
+          Log out
+        </button>
+      </footer>
     </div>
   )
 }

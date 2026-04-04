@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.models import Corridor, Incident, User, Vehicle
-from app.schemas import IncidentDetailOut, VehicleLocationBody, VehicleMineOut, VehicleStatusBody
+from app.schemas import (
+    IncidentDetailOut,
+    VehicleIncidentHistoryItem,
+    VehicleLocationBody,
+    VehicleMineOut,
+    VehicleStatusBody,
+)
 from app.security import get_current_user, require_role
 from app.routers.incidents import incident_to_detail_out
 from app.socket_server import emit_to_corridor
@@ -46,6 +52,42 @@ def list_my_vehicles(
             vehicle_type=v.vehicle_type,
         )
         for v, cname in rows
+    ]
+
+
+@router.get("/{vehicle_id}/incidents/history", response_model=list[VehicleIncidentHistoryItem])
+def list_vehicle_incident_history(
+    vehicle_id: uuid.UUID,
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("driver")),
+):
+    """Last N incidents this vehicle was dispatched to (includes closed)."""
+    v = db.get(Vehicle, vehicle_id)
+    if not v:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+    if v.driver_user_id != user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your vehicle")
+    rows = db.execute(
+        text(
+            """
+            SELECT i.id, i.incident_type, i.status, i.created_at
+            FROM incidents i
+            WHERE i.id IN (SELECT DISTINCT incident_id FROM dispatches WHERE vehicle_id = :vid)
+            ORDER BY i.updated_at DESC NULLS LAST, i.created_at DESC
+            LIMIT :lim
+            """
+        ),
+        {"vid": str(vehicle_id), "lim": limit},
+    ).mappings().all()
+    return [
+        VehicleIncidentHistoryItem(
+            id=r["id"],
+            incident_type=r["incident_type"],
+            status=r["status"],
+            created_at=r["created_at"],
+        )
+        for r in rows
     ]
 
 

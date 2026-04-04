@@ -124,6 +124,15 @@ class VehicleMineOut(BaseModel):
     vehicle_type: str
 
 
+class VehicleIncidentHistoryItem(BaseModel):
+    """Incidents this vehicle was dispatched to (App3 history list)."""
+
+    id: uuid.UUID
+    incident_type: str
+    status: str
+    created_at: datetime
+
+
 class DispatchBody(BaseModel):
     vehicle_id: uuid.UUID
 

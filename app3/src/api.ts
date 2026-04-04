@@ -45,11 +45,6 @@ function parseErrorBody(text: string, httpStatus: number): string {
   return trimmed
 }
 
-async function readErrorMessage(r: Response): Promise<string> {
-  const text = await r.text()
-  return parseErrorBody(text, r.status)
-}
-
 function parseJsonSafe<T>(text: string): T {
   const t = text.trim()
   if (!t) return {} as T
@@ -75,10 +70,11 @@ export async function login(phone: string, password: string) {
     body: JSON.stringify({ phone, password }),
     cache: 'no-store',
   })
+  const text = await r.text()
   if (!r.ok) {
-    throw new Error(await readErrorMessage(r))
+    throw new Error(parseErrorBody(text, r.status))
   }
-  return r.json() as Promise<{ access_token: string; user: User }>
+  return parseJsonSafe<{ access_token: string; user: User }>(text)
 }
 
 export async function fetchJson<T>(path: string, token: string): Promise<T> {
