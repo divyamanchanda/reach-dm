@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.schemas import NearbyVehicleOut, PublicIncidentCreate, PublicIncidentResponse
+from app.services.dispatch import NEARBY_VEHICLE_DRIVER_JOIN, NEARBY_VEHICLE_ORDER_BY
 from app.services.trust_score import compute_trust_public_sos, count_nearby_reports
 
 SPEED_KMH = 40.0
@@ -84,11 +85,12 @@ def nearest_available_ambulance_eta(db: Session, incident_id: uuid.UUID) -> floa
               v.lat AS lat,
               {dist_sql} AS dist_m
             FROM vehicles v
+            {NEARBY_VEHICLE_DRIVER_JOIN}
             WHERE v.vehicle_type = 'ambulance'
               AND v.is_available = true
               AND v.status = 'available'
               AND v.lat IS NOT NULL AND v.lng IS NOT NULL
-            ORDER BY dist_m ASC
+            {NEARBY_VEHICLE_ORDER_BY}
             LIMIT 1
             """
         ),
@@ -200,11 +202,12 @@ def list_nearby_ambulances(db: Session, incident_id: uuid.UUID, limit: int = 20)
               v.lat AS lat,
               {dist_sql} AS dist_m
             FROM vehicles v
+            {NEARBY_VEHICLE_DRIVER_JOIN}
             WHERE v.vehicle_type = 'ambulance'
               AND v.is_available = true
               AND v.status = 'available'
               AND v.lat IS NOT NULL AND v.lng IS NOT NULL
-            ORDER BY dist_m ASC
+            {NEARBY_VEHICLE_ORDER_BY}
             LIMIT :lim
             """
         ),

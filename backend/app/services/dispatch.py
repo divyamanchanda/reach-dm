@@ -8,6 +8,21 @@ from sqlalchemy.orm import Session
 
 from app.models import Dispatch, Incident, IncidentEvent, Vehicle
 
+# --- Vehicle ranking for nearby / ETA queries (see app.services.public_incident) ---
+# Prefer ambulances with an assigned crew; among those, prefer users with role "driver"
+# so demo vehicle AMB-03 (Suresh) ranks above unassigned ambulances even if slightly farther.
+NEARBY_VEHICLE_DRIVER_JOIN = "LEFT JOIN users driver_user ON driver_user.id = v.driver_user_id"
+
+NEARBY_VEHICLE_ORDER_BY = """
+ORDER BY
+  CASE
+    WHEN v.driver_user_id IS NOT NULL AND driver_user.role = 'driver' THEN 0
+    WHEN v.driver_user_id IS NOT NULL THEN 1
+    ELSE 2
+  END ASC,
+  dist_m ASC
+"""
+
 
 def run_dispatch(db: Session, *, incident_id: uuid.UUID, vehicle_id: uuid.UUID) -> Dispatch:
     """Single transaction: lock rows, validate, write dispatch + timeline + vehicle/incident updates."""

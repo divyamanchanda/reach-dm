@@ -101,7 +101,12 @@ export default function App() {
   const [hoaxFullScreen, setHoaxFullScreen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [gpsOk, setGpsOk] = useState(true)
+  const [awaitingNextCall, setAwaitingNextCall] = useState(false)
   const hadLocationSuccess = useRef(false)
+
+  useEffect(() => {
+    if (incident) setAwaitingNextCall(false)
+  }, [incident])
 
   const loadIncidentFromServer = useCallback(async (): Promise<IncidentDetail | null> => {
     if (!token || !vehicle) return null
@@ -261,6 +266,7 @@ export default function App() {
     setIncident(null)
     setHistory([])
     setHoaxFullScreen(false)
+    setAwaitingNextCall(false)
     hadLocationSuccess.current = false
     setGpsOk(true)
   }
@@ -268,6 +274,13 @@ export default function App() {
   const dismissHoax = () => {
     setHoaxFullScreen(false)
     void refreshIncident()
+  }
+
+  const acknowledgeReadyForNextCall = () => {
+    setAwaitingNextCall(false)
+    setActionError(null)
+    void loadIncidentFromServer()
+    void loadHistory()
   }
 
   const runStep = async (step: DriverStep) => {
@@ -295,6 +308,7 @@ export default function App() {
       } else {
         await patchJson(`/incidents/${iid}/status`, token, { status: 'closed' })
         await patchJson(`/vehicles/${vid}/status`, token, { status: 'available' })
+        setAwaitingNextCall(true)
       }
       try {
         await loadIncidentFromServer()
@@ -406,6 +420,13 @@ export default function App() {
                 )}
                 {actionError && <p className="sun-err">{actionError}</p>}
               </>
+            ) : awaitingNextCall ? (
+              <div className="sun-next-call">
+                <p className="sun-cleared">Last call cleared.</p>
+                <button type="button" className="sun-ready-next" onClick={acknowledgeReadyForNextCall}>
+                  READY FOR NEXT CALL
+                </button>
+              </div>
             ) : (
               <p className="sun-standby">STANDING BY</p>
             )}
