@@ -4,14 +4,13 @@ import { io, Socket } from 'socket.io-client'
 import './App.css'
 import { API, apiUrl, fetchJson, login, patchJson, postJson, type User } from './api'
 
-const DISPATCH_WINDOW_MS = 2 * 60 * 60 * 1000
+const TWO_HOURS_MS = 2 * 60 * 60 * 1000
 
-function isWithinDispatchWindow(createdAt: string): boolean {
+/** True when the incident is older than 2 hours (client clock vs created_at). */
+function isIncidentExpiredByAge(createdAt: string): boolean {
   const t = new Date(createdAt).getTime()
   if (Number.isNaN(t)) return false
-  const ageMs = Date.now() - t
-  if (ageMs < 0) return false
-  return ageMs <= DISPATCH_WINDOW_MS
+  return Date.now() - t > TWO_HOURS_MS
 }
 
 type Corridor = {
@@ -249,10 +248,14 @@ function App() {
   const [assignedVehicleByIncidentId, setAssignedVehicleByIncidentId] = useState<
     Record<string, AssignedVehicle>
   >({})
-  /** Re-render periodically so NEW badges drop after 5 minutes without a list refresh. */
+  /** Re-render periodically: NEW badges, and client-side 2h expiry vs created_at. */
   const [_newBadgeTick, setNewBadgeTick] = useState(0)
+  const [, setAgeTick] = useState(0)
   useEffect(() => {
-    const id = window.setInterval(() => setNewBadgeTick((n) => n + 1), 60_000)
+    const id = window.setInterval(() => {
+      setNewBadgeTick((n) => n + 1)
+      setAgeTick((n) => n + 1)
+    }, 60_000)
     return () => window.clearInterval(id)
   }, [])
 
@@ -401,9 +404,9 @@ function App() {
   const dispatchIncident = async (incident: Incident) => {
     if (
       !token ||
+      isIncidentExpiredByAge(incident.created_at) ||
       ['dispatched', 'recalled', 'confirmed_real', 'expired'].includes(incident.status) ||
       incident.eligible_for_reassign ||
-      !isWithinDispatchWindow(incident.created_at) ||
       dispatchingByIncidentId[incident.id]
     )
       return
@@ -468,7 +471,8 @@ function App() {
   }
 
   const reassignIncident = async (incident: Incident) => {
-    if (!token || !incident.eligible_for_reassign || dispatchingByIncidentId[incident.id]) return
+    if (!token || isIncidentExpiredByAge(incident.created_at) || !incident.eligible_for_reassign || dispatchingByIncidentId[incident.id])
+      return
     setError(null)
     setErrorHint(null)
     setDispatchingByIncidentId((prev) => ({ ...prev, [incident.id]: true }))
@@ -492,7 +496,7 @@ function App() {
   }
 
   const confirmRealIncident = async (incident: Incident) => {
-    if (!token || dispatchingByIncidentId[incident.id]) return
+    if (!token || isIncidentExpiredByAge(incident.created_at) || dispatchingByIncidentId[incident.id]) return
     setDispatchingByIncidentId((prev) => ({ ...prev, [incident.id]: true }))
     setError(null)
     setErrorHint(null)
@@ -507,7 +511,7 @@ function App() {
   }
 
   const recallIncident = async (incident: Incident) => {
-    if (!token || dispatchingByIncidentId[incident.id]) return
+    if (!token || isIncidentExpiredByAge(incident.created_at) || dispatchingByIncidentId[incident.id]) return
     setDispatchingByIncidentId((prev) => ({ ...prev, [incident.id]: true }))
     setError(null)
     setErrorHint(null)
@@ -656,15 +660,14 @@ function App() {
                   Assigned: {vehicleLabelById[assignedVehicleByIncidentId[i.id].vehicle_id] ?? assignedVehicleByIncidentId[i.id].label}
                 </div>
               )}
-              {i.status === 'recalled' ? (
+              {isIncidentExpiredByAge(i.created_at) || i.status === 'expired' ? (
+                <span className="expired-badge" title="Older than 2 hours since created — no actions available">
+                  Expired
+                </span>
+              ) : i.status === 'recalled' ? (
                 <p className="recall-msg">Ambulance recalled — hoax confirmed</p>
               ) : i.status === 'confirmed_real' ? (
                 <p className="confirm-msg">Incident verified as real ✓</p>
-              ) : i.status === 'expired' ||
-                (['open', 'verifying', 'confirmed_real'].includes(i.status) && !isWithinDispatchWindow(i.created_at)) ? (
-                <span className="expired-badge" title="Incidents in the queue for more than 2 hours are expired">
-                  Expired
-                </span>
               ) : i.status === 'dispatched' ? (
                 <div className="card-dispatch-actions card-dispatch-stack">
                   <div className="card-dispatch-actions">
@@ -857,14 +860,14 @@ function App() {
                   </li>
                 ))}
               </ul>
-              {selected.status === 'recalled' ? (
+              {isIncidentExpiredByAge(selected.created_at) || selected.status === 'expired' ? (
+                <span className="expired-badge" title="Older than 2 hours since created — no actions available">
+                  Expired
+                </span>
+              ) : selected.status === 'recalled' ? (
                 <p className="recall-msg">Ambulance recalled — hoax confirmed</p>
               ) : selected.status === 'confirmed_real' ? (
                 <p className="confirm-msg">Incident verified as real ✓</p>
-              ) : selected.status === 'expired' ||
-                (['open', 'verifying', 'confirmed_real'].includes(selected.status) &&
-                  !isWithinDispatchWindow(selected.created_at)) ? (
-                <span className="expired-badge">Expired</span>
               ) : selected.status === 'dispatched' ? (
                 <div className="card-dispatch-actions card-dispatch-stack">
                   <div className="card-dispatch-actions">

@@ -250,6 +250,8 @@ class LiveMapVehicleOut(BaseModel):
     latitude: float | None
     longitude: float | None
     assigned_incident_id: uuid.UUID | None = None
+    assigned_incident_type: str | None = None
+    driver_name: str | None = None
 
 
 class LiveMapCorridorOut(BaseModel):

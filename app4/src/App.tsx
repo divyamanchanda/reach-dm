@@ -81,6 +81,8 @@ type LiveMapVehicle = {
   latitude: number | null
   longitude: number | null
   assigned_incident_id?: string | null
+  assigned_incident_type?: string | null
+  driver_name?: string | null
 }
 
 type LiveMapCorridor = {
@@ -574,6 +576,7 @@ function CorridorRouteMap({
 
 function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
   const roadY = HW_DIAGRAM.roadY
+  const [openVehicleKey, setOpenVehicleKey] = useState<string | null>(null)
 
   const incidentsPlaced = useMemo(() => {
     const out: { key: string; inc: LiveMapIncident; km: number; x: number; y: number }[] = []
@@ -589,19 +592,53 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
     return out
   }, [corridors, roadY])
 
-  const vehiclesPlaced = useMemo(() => {
-    const out: { key: string; v: LiveMapVehicle; km: number; x: number; y: number }[] = []
+  const { vehiclesPlaced, diagramH } = useMemo(() => {
+    const STAGGER_PX = 36
+    const BASE_OFF = 42
+    type Raw = { key: string; v: LiveMapVehicle; km: number; x: number }
+    const raw: Raw[] = []
     for (const c of corridors) {
       for (const v of c.vehicles) {
         const km = kmForLiveVehicle(v)
         if (km == null) continue
-        const x = kmToDiagramX(km) + jitterId(v.id, 8)
-        const y = roadY + 42 + jitterId(`${v.id}y`, 6)
-        out.push({ key: `${c.id}-${v.id}`, v, km, x, y })
+        const x = kmToDiagramX(km) + jitterId(v.id, 6)
+        raw.push({ key: `${c.id}-${v.id}`, v, km, x })
       }
     }
-    return out
+    raw.sort((a, b) => a.km - b.km || a.key.localeCompare(b.key))
+    const lanes: number[] = []
+    for (let i = 0; i < raw.length; i++) {
+      let lane = 0
+      while (true) {
+        let laneOk = true
+        for (let j = 0; j < i; j++) {
+          if (Math.abs(raw[i].km - raw[j].km) <= 20 && lanes[j] === lane) {
+            laneOk = false
+            break
+          }
+        }
+        if (laneOk) break
+        lane += 1
+      }
+      lanes.push(lane)
+    }
+    const maxLane = lanes.length ? Math.max(...lanes) : 0
+    const h = Math.max(HW_DIAGRAM.h, roadY + BASE_OFF + maxLane * STAGGER_PX + 96)
+    const placed = raw.map((r, i) => ({
+      key: r.key,
+      v: r.v,
+      km: r.km,
+      x: r.x,
+      lane: lanes[i],
+      y: roadY + BASE_OFF + lanes[i] * STAGGER_PX + jitterId(`${r.key}y`, 3),
+    }))
+    return { vehiclesPlaced: placed, diagramH: h }
   }, [corridors, roadY])
+
+  const openVehicleRow = useMemo(
+    () => (openVehicleKey ? vehiclesPlaced.find((p) => p.key === openVehicleKey) : undefined),
+    [openVehicleKey, vehiclesPlaced],
+  )
 
   const kmTicks = [0, 50, 100, 150, 200, 250, 300]
   const x0 = kmToDiagramX(0)
@@ -617,7 +654,7 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
       </div>
       <svg
         className="highway-svg highway-svg-live"
-        viewBox={`0 0 ${HW_DIAGRAM.w} ${HW_DIAGRAM.h}`}
+        viewBox={`0 0 ${HW_DIAGRAM.w} ${diagramH}`}
         role="img"
         aria-label="Highway diagram: incidents and ambulances by kilometre"
       >
@@ -627,7 +664,13 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
             <stop offset="100%" stopColor="#1e293b" />
           </linearGradient>
         </defs>
-        <rect width={HW_DIAGRAM.w} height={HW_DIAGRAM.h} fill="transparent" />
+        <rect
+          width={HW_DIAGRAM.w}
+          height={diagramH}
+          fill="transparent"
+          onClick={() => setOpenVehicleKey(null)}
+          style={{ pointerEvents: 'all' }}
+        />
         <line
           x1={x0}
           y1={roadY}
@@ -636,6 +679,7 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
           stroke="url(#hwRoadGradH)"
           strokeWidth={44}
           strokeLinecap="round"
+          pointerEvents="none"
         />
         <line
           x1={x0}
@@ -646,11 +690,12 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
           strokeWidth={3}
           strokeDasharray="12 16"
           opacity={0.85}
+          pointerEvents="none"
         />
         {kmTicks.map((km) => {
           const x = kmToDiagramX(km)
           return (
-            <g key={`tick-${km}`}>
+            <g key={`tick-${km}`} style={{ pointerEvents: 'none' }}>
               <line x1={x} y1={roadY - 24} x2={x} y2={roadY + 24} stroke="#64748b" strokeWidth={1.5} opacity={0.7} />
               <text x={x} y={roadY + 44} textAnchor="middle" fill="#94a3b8" fontSize={11} fontWeight={600}>
                 {km} km
@@ -661,7 +706,7 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
         {NH48_DIAGRAM_CITIES.map(({ km, label }) => {
           const x = kmToDiagramX(km)
           return (
-            <g key={label}>
+            <g key={label} style={{ pointerEvents: 'none' }}>
               <text
                 x={x}
                 y={roadY - 52}
@@ -678,7 +723,7 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
           )
         })}
         {incidentsPlaced.map(({ key, inc, km, x, y }) => (
-          <g key={`inc-${key}`} transform={`translate(${x}, ${y})`}>
+          <g key={`inc-${key}`} transform={`translate(${x}, ${y})`} style={{ pointerEvents: 'none' }}>
             <title>
               {`${inc.incident_type} · ${inc.severity} · KM ${km.toFixed(0)} · ${inc.status} · ${new Date(inc.created_at).toLocaleString()} · Trust ${trustLabel(inc.trust_score)}`}
             </title>
@@ -686,33 +731,96 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
           </g>
         ))}
         {vehiclesPlaced.map(({ key, v, km, x, y }) => (
-          <g key={`veh-${key}`} className="hw-amb-svg" transform={`translate(${x}, ${y})`}>
+          <g
+            key={`veh-${key}`}
+            className="hw-amb-svg hw-amb-marker"
+            role="button"
+            tabIndex={0}
+            transform={`translate(${x}, ${y})`}
+            style={{ cursor: 'pointer' }}
+            onClick={(e) => {
+              e.stopPropagation()
+              setOpenVehicleKey((prev) => (prev === key ? null : key))
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                e.stopPropagation()
+                setOpenVehicleKey((prev) => (prev === key ? null : key))
+              }
+            }}
+          >
             <title>
-              {`${v.label} · ${vehicleStatusLabel(v.status)} · KM ${km.toFixed(0)} · Assigned: ${v.assigned_incident_id ?? '—'}`}
+              {`${v.label} · ${vehicleStatusLabel(v.status)} · KM ${km.toFixed(0)} · Click for details`}
             </title>
             <circle
-              r={18}
+              r={20}
               fill={ambulanceDiagramFill(v.status)}
-              stroke="#0f172a"
-              strokeWidth={1.5}
-              opacity={0.95}
+              stroke={openVehicleKey === key ? '#f8fafc' : '#0f172a'}
+              strokeWidth={openVehicleKey === key ? 2.5 : 1.5}
+              opacity={0.96}
             />
-            <text x={0} y={6} textAnchor="middle" fontSize={16}>
+            <text x={0} y={6} textAnchor="middle" fontSize={16} pointerEvents="none">
               🚑
             </text>
             <text
               x={0}
-              y={30}
+              y={32}
               textAnchor="middle"
               fill="#e2e8f0"
               fontSize={10}
               fontWeight={700}
+              pointerEvents="none"
               style={{ textShadow: '0 1px 2px rgba(0,0,0,0.9)' }}
             >
               {v.label}
             </text>
           </g>
         ))}
+        {openVehicleRow ? (
+          <foreignObject
+            x={Math.min(openVehicleRow.x + 26, HW_DIAGRAM.w - 272)}
+            y={Math.max(6, openVehicleRow.y - 58)}
+            width={260}
+            height={172}
+            className="hw-amb-foreign"
+          >
+            <div
+              xmlns="http://www.w3.org/1999/xhtml"
+              className="hw-amb-popup"
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="hw-amb-popup-head">
+                <strong className="hw-amb-popup-title">{openVehicleRow.v.label}</strong>
+                <button
+                  type="button"
+                  className="hw-amb-popup-close"
+                  aria-label="Close"
+                  onClick={() => setOpenVehicleKey(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <dl className="hw-amb-popup-dl">
+                <div>
+                  <dt>Status</dt>
+                  <dd>{vehicleStatusLabel(openVehicleRow.v.status)}</dd>
+                </div>
+                {openVehicleRow.v.assigned_incident_type ? (
+                  <div>
+                    <dt>Assigned incident</dt>
+                    <dd>{openVehicleRow.v.assigned_incident_type}</dd>
+                  </div>
+                ) : null}
+                <div>
+                  <dt>Driver</dt>
+                  <dd>{openVehicleRow.v.driver_name?.trim() || '—'}</dd>
+                </div>
+              </dl>
+            </div>
+          </foreignObject>
+        ) : null}
       </svg>
     </div>
   )

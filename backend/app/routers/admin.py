@@ -280,7 +280,7 @@ def admin_live_map(
         vehicles: list[LiveMapVehicleOut] = []
         for v, la, ln in db.execute(qv).all():
             assign_row = db.execute(
-                select(Incident.km_marker, Incident.id)
+                select(Incident.km_marker, Incident.id, Incident.incident_type)
                 .join(Dispatch, Dispatch.incident_id == Incident.id)
                 .where(Dispatch.vehicle_id == v.id)
                 .order_by(Dispatch.created_at.desc())
@@ -288,6 +288,13 @@ def admin_live_map(
             ).first()
             last_km = assign_row[0] if assign_row else None
             assign_incident_id = assign_row[1] if assign_row else None
+            assign_incident_type = assign_row[2] if assign_row else None
+            driver_name: str | None = None
+            if v.driver_user_id:
+                drv = db.get(User, v.driver_user_id)
+                if drv is not None:
+                    raw = (drv.full_name or drv.phone or "").strip()
+                    driver_name = raw or None
             vehicles.append(
                 LiveMapVehicleOut(
                     id=v.id,
@@ -297,6 +304,8 @@ def admin_live_map(
                     latitude=float(la) if la is not None else None,
                     longitude=float(ln) if ln is not None else None,
                     assigned_incident_id=assign_incident_id,
+                    assigned_incident_type=assign_incident_type,
+                    driver_name=driver_name,
                 )
             )
 
