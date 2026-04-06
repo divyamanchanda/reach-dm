@@ -102,6 +102,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [gpsOk, setGpsOk] = useState(true)
   const [awaitingNextCall, setAwaitingNextCall] = useState(false)
+  const [broadcastMessage, setBroadcastMessage] = useState<string | null>(null)
   const hadLocationSuccess = useRef(false)
 
   useEffect(() => {
@@ -205,6 +206,11 @@ export default function App() {
     s.on('incident:dispatched', bump)
     s.on('incident:updated', bump)
     s.on('incident:recalled', bump)
+    s.on('admin_broadcast', (payload: { message?: string }) => {
+      if (payload && typeof payload.message === 'string' && payload.message.trim()) {
+        setBroadcastMessage(payload.message.trim())
+      }
+    })
     return () => {
       s.emit('unsubscribe_corridor', { corridor_id: vehicle.corridor_id })
       s.disconnect()
@@ -267,6 +273,7 @@ export default function App() {
     setHistory([])
     setHoaxFullScreen(false)
     setAwaitingNextCall(false)
+    setBroadcastMessage(null)
     hadLocationSuccess.current = false
     setGpsOk(true)
   }
@@ -377,6 +384,14 @@ export default function App() {
 
   return (
     <div className="sun-app">
+      {broadcastMessage ? (
+        <div className="sun-broadcast" role="status">
+          <p className="sun-broadcast-text">{broadcastMessage}</p>
+          <button type="button" className="sun-broadcast-dismiss" onClick={() => setBroadcastMessage(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
       <div className={`sun-gps ${gpsOk ? 'sun-gps-on' : 'sun-gps-lost'}`} role="status">
         {gpsOk ? 'GPS ON' : 'GPS LOST'}
       </div>

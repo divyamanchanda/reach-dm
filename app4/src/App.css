@@ -725,3 +725,162 @@ tr:last-child td {
   margin: 0;
   padding-left: 1rem;
 }
+
+.dash-export-row {
+  margin: 1rem 0;
+}
+
+.btn-export {
+  padding: 0.55rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2, #1e293b);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.btn-export:hover {
+  border-color: #64748b;
+}
+
+.analytics-page .intro,
+.broadcast-page .intro,
+.speed-zones-page .intro {
+  color: var(--muted);
+  margin-top: 0;
+  max-width: 52rem;
+}
+
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.analytics-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  background: var(--surface);
+}
+
+.analytics-card-wide {
+  grid-column: 1 / -1;
+}
+
+.analytics-card h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.analytics-card .small {
+  font-size: 0.82rem;
+  margin: 0 0 0.75rem;
+}
+
+.analytics-big-num {
+  font-size: 2.75rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+.analytics-big-num .unit {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-left: 0.35rem;
+}
+
+.analytics-sub h4 {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.analytics-heatmap-svg {
+  width: 100%;
+  height: auto;
+  max-height: 100px;
+  display: block;
+}
+
+.analytics-trend-svg {
+  display: block;
+  margin-top: 0.35rem;
+}
+
+.analytics-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.analytics-bar-row {
+  display: grid;
+  grid-template-columns: 88px 1fr 36px;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.analytics-bar-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analytics-bar-track {
+  height: 12px;
+  background: #1e293b;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.analytics-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e, #eab308);
+  border-radius: 6px;
+}
+
+.analytics-bar-num {
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.analytics-duty-table {
+  width: 100%;
+  font-size: 0.88rem;
+}
+
+.analytics-duty-table th,
+.analytics-duty-table td {
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+}
+
+.broadcast-form textarea {
+  width: 100%;
+  max-width: 36rem;
+  margin-top: 0.35rem;
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.speed-zones-page .grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.cell-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}

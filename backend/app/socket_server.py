@@ -42,6 +42,8 @@ async def connect(sid, environ, auth):
     if not user:
         return False
     await sio.save_session(sid, {"user_id": str(user.id), "role": user.role})
+    if user.role == "driver":
+        await sio.enter_room(sid, "drivers")
     return True
 
 
@@ -72,3 +74,8 @@ async def unsubscribe_corridor(sid, data):
 
 async def emit_to_corridor(event: str, corridor_id: uuid.UUID, payload: dict) -> None:
     await sio.emit(event, payload, room=f"corridor:{corridor_id}")
+
+
+async def emit_driver_broadcast(payload: dict) -> None:
+    """Deliver admin broadcast to all connected App3 (driver) clients."""
+    await sio.emit("admin_broadcast", payload, room="drivers")

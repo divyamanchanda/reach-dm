@@ -11,6 +11,36 @@
   padding-bottom: max(1rem, env(safe-area-inset-bottom));
 }
 
+.sun-broadcast {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  background: #dbeafe;
+  border-bottom: 2px solid #2563eb;
+  color: #1e3a8a;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.sun-broadcast-text {
+  margin: 0;
+  flex: 1;
+}
+
+.sun-broadcast-dismiss {
+  flex-shrink: 0;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.85rem;
+  font-weight: 800;
+  border: 2px solid #1d4ed8;
+  border-radius: 8px;
+  background: #fff;
+  color: #1e40af;
+  cursor: pointer;
+}
+
 .sun-login {
   padding: 1.25rem;
   padding-top: max(2rem, env(safe-area-inset-top));

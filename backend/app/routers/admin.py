@@ -1,25 +1,47 @@
 from __future__ import annotations
 
+import csv
+import io
 import uuid
+from datetime import timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import delete, func, or_, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Corridor, Dispatch, Incident, IncidentEvent, Organisation, User, Vehicle
+from app.models import (
+    BroadcastMessage,
+    Corridor,
+    Dispatch,
+    Incident,
+    IncidentEvent,
+    Organisation,
+    SpeedZone,
+    User,
+    Vehicle,
+)
 from app.schemas import (
+    AdminAnalyticsOut,
     AdminCorridorCreateBody,
     AdminDashboardOut,
     AdminIncidentDetailOut,
     AdminRecentIncidentItem,
     AdminUserCreateBody,
+    AnalyticsActiveDriverOut,
+    AnalyticsHeatmapBucketOut,
+    AnalyticsResponsePointOut,
+    AnalyticsVehicleDispatchOut,
+    BroadcastBody,
     CorridorOut,
     LiveMapCorridorOut,
     LiveMapIncidentOut,
     LiveMapOut,
     LiveMapVehicleOut,
     OrganisationMiniOut,
+    SpeedZoneCreateBody,
+    SpeedZoneOut,
+    SpeedZonePatchBody,
     UserPublic,
 )
 from app.security import hash_password, require_role
@@ -321,3 +343,289 @@ def admin_live_map(
         )
 
     return LiveMapOut(corridors=out_corridors)
+
+
+@router.get("/analytics", response_model=AdminAnalyticsOut)
+def admin_analytics(
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+):
+    avg_m = db.execute(
+        text(
+            """
+            SELECT AVG(EXTRACT(EPOCH FROM (fd.first_at - i.created_at)) / 60.0)
+            FROM incidents i
+            INNER JOIN (
+                SELECT incident_id, MIN(created_at) AS first_at
+                FROM dispatches
+                GROUP BY incident_id
+            ) fd ON fd.incident_id = i.id
+            """
+        )
+    ).scalar()
+
+    rt_rows = db.execute(
+        text(
+            """
+            SELECT i.id, i.created_at,
+                   EXTRACT(EPOCH FROM (fd.first_at - i.created_at)) / 60.0 AS mins
+            FROM incidents i
+            INNER JOIN (
+                SELECT incident_id, MIN(created_at) AS first_at
+                FROM dispatches
+                GROUP BY incident_id
+            ) fd ON fd.incident_id = i.id
+            ORDER BY i.created_at DESC
+            LIMIT 20
+            """
+        )
+    ).fetchall()
+    response_last_20: list[AnalyticsResponsePointOut] = []
+    for rid, reported_at, mins in rt_rows:
+        if mins is None:
+            continue
+        response_last_20.append(
+            AnalyticsResponsePointOut(
+                incident_id=rid,
+                reported_at=reported_at,
+                response_minutes=round(float(mins), 2),
+            )
+        )
+
+    hm_rows = db.execute(
+        text(
+            """
+            SELECT FLOOR(km_marker / 20.0) * 20.0 AS seg, COUNT(*)::int AS cnt
+            FROM incidents
+            WHERE km_marker IS NOT NULL
+            GROUP BY 1
+            ORDER BY 1
+            """
+        )
+    ).fetchall()
+    heatmap_buckets = [
+        AnalyticsHeatmapBucketOut(segment_start_km=float(seg), incident_count=int(cnt))
+        for seg, cnt in hm_rows
+        if seg is not None
+    ]
+
+    vu_rows = db.execute(
+        text(
+            """
+            SELECT v.label, COUNT(d.id)::int AS cnt
+            FROM dispatches d
+            JOIN vehicles v ON v.id = d.vehicle_id
+            GROUP BY v.id, v.label
+            ORDER BY COUNT(d.id) DESC, v.label
+            """
+        )
+    ).fetchall()
+    vehicle_dispatch_counts = [
+        AnalyticsVehicleDispatchOut(vehicle_label=label, dispatch_count=cnt) for label, cnt in vu_rows
+    ]
+
+    ad_rows = db.execute(
+        select(User, Vehicle)
+        .join(Vehicle, Vehicle.driver_user_id == User.id)
+        .where(User.role == "driver")
+        .order_by(func.coalesce(User.full_name, User.phone))
+    ).all()
+    active_drivers: list[AnalyticsActiveDriverOut] = []
+    for u, v in ad_rows:
+        st = (v.status or "").lower()
+        on_active = st in ("dispatched", "en_route", "on_scene")
+        active_drivers.append(
+            AnalyticsActiveDriverOut(
+                driver_name=(u.full_name or u.phone or "").strip() or "—",
+                phone=u.phone,
+                vehicle_label=v.label,
+                vehicle_status=v.status,
+                last_gps_at=v.updated_at,
+                on_active_call=on_active,
+            )
+        )
+
+    return AdminAnalyticsOut(
+        avg_response_time_minutes=round(float(avg_m), 2) if avg_m is not None else None,
+        response_time_last_20=response_last_20,
+        heatmap_buckets=heatmap_buckets,
+        vehicle_dispatch_counts=vehicle_dispatch_counts,
+        active_drivers=active_drivers,
+    )
+
+
+@router.post("/broadcast")
+async def admin_broadcast(
+    body: BroadcastBody,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_user),
+):
+    from app.socket_server import emit_driver_broadcast
+
+    msg = body.message.strip()
+    if not msg:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is empty")
+    row = BroadcastMessage(message=msg, created_by=user.id)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    created = row.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    await emit_driver_broadcast(
+        {
+            "message": row.message,
+            "id": str(row.id),
+            "created_at": created.isoformat(),
+        }
+    )
+    return {"ok": True, "id": str(row.id)}
+
+
+@router.get("/incidents/export")
+def export_incidents_csv(
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+    limit: int = Query(100, ge=1, le=500),
+):
+    rows = db.execute(
+        text(
+            """
+            SELECT
+              i.public_report_id,
+              i.incident_type,
+              i.severity,
+              i.km_marker,
+              i.status,
+              i.trust_score,
+              i.created_at,
+              fd.dispatched_at,
+              v.label,
+              EXTRACT(EPOCH FROM (fd.dispatched_at - i.created_at)) / 60.0 AS resp_min
+            FROM incidents i
+            LEFT JOIN LATERAL (
+              SELECT d.created_at AS dispatched_at, d.vehicle_id
+              FROM dispatches d
+              WHERE d.incident_id = i.id
+              ORDER BY d.created_at ASC
+              LIMIT 1
+            ) fd ON true
+            LEFT JOIN vehicles v ON v.id = fd.vehicle_id
+            ORDER BY i.created_at DESC
+            LIMIT :lim
+            """
+        ),
+        {"lim": limit},
+    ).fetchall()
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(
+        [
+            "Report ID",
+            "Type",
+            "Severity",
+            "KM",
+            "Status",
+            "Trust Score",
+            "Reported At",
+            "Dispatched At",
+            "Vehicle Assigned",
+            "Response Time Minutes",
+        ]
+    )
+    for row in rows:
+        pr, it, sev, km, st, trust, created, disp_at, vlabel, resp_min = row
+        w.writerow(
+            [
+                pr or "",
+                it,
+                sev,
+                f"{float(km):.1f}" if km is not None else "",
+                st,
+                trust,
+                created.isoformat() if created else "",
+                disp_at.isoformat() if disp_at else "",
+                vlabel or "",
+                f"{float(resp_min):.2f}" if resp_min is not None else "",
+            ]
+        )
+
+    data = buf.getvalue()
+    return Response(
+        content=data.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="reach_incidents_export.csv"'},
+    )
+
+
+@router.get("/speed-zones", response_model=list[SpeedZoneOut])
+def list_speed_zones(
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+    corridor_id: uuid.UUID | None = None,
+):
+    q = select(SpeedZone).order_by(SpeedZone.corridor_id, SpeedZone.start_km)
+    if corridor_id is not None:
+        q = q.where(SpeedZone.corridor_id == corridor_id)
+    rows = db.execute(q).scalars().all()
+    return [SpeedZoneOut.model_validate(r) for r in rows]
+
+
+@router.post("/speed-zones", response_model=SpeedZoneOut)
+def create_speed_zone(
+    body: SpeedZoneCreateBody,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+):
+    if body.end_km <= body.start_km:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_km must be greater than start_km")
+    if not db.get(Corridor, body.corridor_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Corridor not found")
+    z = SpeedZone(
+        corridor_id=body.corridor_id,
+        start_km=body.start_km,
+        end_km=body.end_km,
+        speed_limit_kph=body.speed_limit_kph,
+    )
+    db.add(z)
+    db.commit()
+    db.refresh(z)
+    return SpeedZoneOut.model_validate(z)
+
+
+@router.patch("/speed-zones/{zone_id}", response_model=SpeedZoneOut)
+def patch_speed_zone(
+    zone_id: uuid.UUID,
+    body: SpeedZonePatchBody,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+):
+    z = db.get(SpeedZone, zone_id)
+    if not z:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Zone not found")
+    if body.start_km is not None:
+        z.start_km = body.start_km
+    if body.end_km is not None:
+        z.end_km = body.end_km
+    if body.speed_limit_kph is not None:
+        z.speed_limit_kph = body.speed_limit_kph
+    if z.end_km <= z.start_km:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_km must be greater than start_km")
+    db.commit()
+    db.refresh(z)
+    return SpeedZoneOut.model_validate(z)
+
+
+@router.delete("/speed-zones/{zone_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_speed_zone(
+    zone_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+):
+    z = db.get(SpeedZone, zone_id)
+    if not z:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Zone not found")
+    db.delete(z)
+    db.commit()
+    return None

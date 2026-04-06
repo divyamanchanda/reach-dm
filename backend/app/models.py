@@ -120,3 +120,29 @@ class Dispatch(Base):
     vehicle_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vehicles.id"), nullable=False)
     cross_boundary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SpeedZone(Base):
+    """Per-corridor KM range speed limit (admin Speed Zones UI)."""
+
+    __tablename__ = "speed_zones"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    corridor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("corridors.id", ondelete="CASCADE"), nullable=False
+    )
+    start_km: Mapped[float] = mapped_column(Float, nullable=False)
+    end_km: Mapped[float] = mapped_column(Float, nullable=False)
+    speed_limit_kph: Mapped[float] = mapped_column(Float, nullable=False, default=100.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BroadcastMessage(Base):
+    """Admin → driver broadcasts (also emitted live over Socket.IO)."""
+
+    __tablename__ = "broadcast_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

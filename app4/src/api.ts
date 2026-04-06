@@ -76,4 +76,38 @@ export async function deleteJson(path: string, token: string): Promise<void> {
   if (!r.ok) throw new Error(await r.text())
 }
 
+export async function patchJson<T>(path: string, token: string, body: unknown): Promise<T> {
+  const r = await fetch(apiUrl(path), {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+    },
+    cache: 'no-store',
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(await r.text())
+  return r.json() as Promise<T>
+}
+
+/** Download CSV (or other attachment) from an admin GET. */
+export async function downloadBlob(path: string, token: string, filename: string): Promise<void> {
+  const r = await fetch(apiUrl(path), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Cache-Control': 'no-store',
+    },
+    cache: 'no-store',
+  })
+  if (!r.ok) throw new Error(await r.text())
+  const blob = await r.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export { API }

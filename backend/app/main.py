@@ -51,5 +51,31 @@ def ensure_coordinate_columns() -> None:
             )
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_vehicles_driver_user ON vehicles (driver_user_id)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS speed_zones (
+                  id UUID PRIMARY KEY,
+                  corridor_id UUID NOT NULL REFERENCES corridors(id) ON DELETE CASCADE,
+                  start_km DOUBLE PRECISION NOT NULL,
+                  end_km DOUBLE PRECISION NOT NULL,
+                  speed_limit_kph DOUBLE PRECISION NOT NULL DEFAULT 100,
+                  created_at TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS broadcast_messages (
+                  id UUID PRIMARY KEY,
+                  message TEXT NOT NULL,
+                  created_by UUID REFERENCES users(id),
+                  created_at TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+        )
 
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app, socketio_path="socket.io")

@@ -278,3 +278,64 @@ class AdminIncidentDetailOut(BaseModel):
     created_at: datetime
     assigned_vehicle_label: str | None
     timeline: list[TimelineEventOut]
+
+
+class BroadcastBody(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+
+
+class AnalyticsResponsePointOut(BaseModel):
+    incident_id: uuid.UUID
+    reported_at: datetime
+    response_minutes: float
+
+
+class AnalyticsHeatmapBucketOut(BaseModel):
+    segment_start_km: float
+    incident_count: int
+
+
+class AnalyticsVehicleDispatchOut(BaseModel):
+    vehicle_label: str
+    dispatch_count: int
+
+
+class AnalyticsActiveDriverOut(BaseModel):
+    driver_name: str
+    phone: str
+    vehicle_label: str
+    vehicle_status: str
+    last_gps_at: datetime | None
+    on_active_call: bool
+
+
+class AdminAnalyticsOut(BaseModel):
+    avg_response_time_minutes: float | None
+    response_time_last_20: list[AnalyticsResponsePointOut]
+    heatmap_buckets: list[AnalyticsHeatmapBucketOut]
+    vehicle_dispatch_counts: list[AnalyticsVehicleDispatchOut]
+    active_drivers: list[AnalyticsActiveDriverOut]
+
+
+class SpeedZoneOut(BaseModel):
+    id: uuid.UUID
+    corridor_id: uuid.UUID
+    start_km: float
+    end_km: float
+    speed_limit_kph: float
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SpeedZoneCreateBody(BaseModel):
+    corridor_id: uuid.UUID
+    start_km: float = Field(..., ge=0)
+    end_km: float = Field(..., ge=0)
+    speed_limit_kph: float = Field(100, gt=0, le=200)
+
+
+class SpeedZonePatchBody(BaseModel):
+    start_km: float | None = Field(None, ge=0)
+    end_km: float | None = Field(None, ge=0)
+    speed_limit_kph: float | None = Field(None, gt=0, le=200)

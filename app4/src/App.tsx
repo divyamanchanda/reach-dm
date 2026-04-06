@@ -1,9 +1,10 @@
 import type { FormEvent } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { API, apiUrl, deleteJson, fetchJson, healthPing, login, postJson, type User } from './api'
+import { AnalyticsPage, BroadcastPage, SpeedZonesPage } from './adminAnalytics'
+import { API, apiUrl, deleteJson, downloadBlob, fetchJson, healthPing, login, postJson, type User } from './api'
 
-type Tab = 'dashboard' | 'map' | 'users' | 'corridors'
+type Tab = 'dashboard' | 'map' | 'users' | 'corridors' | 'analytics' | 'broadcast' | 'speed_zones'
 
 type Dashboard = {
   active_incidents: number
@@ -875,6 +876,10 @@ export default function App() {
   const [corridorDraft, setCorridorDraft] = useState<CorridorDraft | null>(null)
   const [newCorridorOrgId, setNewCorridorOrgId] = useState('')
 
+  useEffect(() => {
+    setPageErr(null)
+  }, [tab])
+
   const loadDashboard = useCallback(async () => {
     if (!token) return
     const ok = await healthPing()
@@ -930,6 +935,11 @@ export default function App() {
 
   useEffect(() => {
     if (!token || tab !== 'corridors') return
+    void loadCorridors().catch((e: unknown) => setPageErr(e instanceof Error ? e.message : String(e)))
+  }, [token, tab, loadCorridors])
+
+  useEffect(() => {
+    if (!token || tab !== 'speed_zones') return
     void loadCorridors().catch((e: unknown) => setPageErr(e instanceof Error ? e.message : String(e)))
   }, [token, tab, loadCorridors])
 
@@ -1192,10 +1202,27 @@ export default function App() {
     <div className="app-shell">
       <nav className="sidebar" aria-label="Admin sections">
         <h1>REACH Admin</h1>
-        <button type="button" className={tab === 'dashboard' ? 'active' : ''} onClick={() => setTab('dashboard')}>Dashboard</button>
-        <button type="button" className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}>Live Map</button>
-        <button type="button" className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>Users</button>
-        <button type="button" className={tab === 'corridors' ? 'active' : ''} onClick={() => setTab('corridors')}>Corridors</button>
+        <button type="button" className={tab === 'dashboard' ? 'active' : ''} onClick={() => setTab('dashboard')}>
+          Dashboard
+        </button>
+        <button type="button" className={tab === 'analytics' ? 'active' : ''} onClick={() => setTab('analytics')}>
+          Analytics
+        </button>
+        <button type="button" className={tab === 'broadcast' ? 'active' : ''} onClick={() => setTab('broadcast')}>
+          Broadcast
+        </button>
+        <button type="button" className={tab === 'map' ? 'active' : ''} onClick={() => setTab('map')}>
+          Live Map
+        </button>
+        <button type="button" className={tab === 'speed_zones' ? 'active' : ''} onClick={() => setTab('speed_zones')}>
+          Speed zones
+        </button>
+        <button type="button" className={tab === 'users' ? 'active' : ''} onClick={() => setTab('users')}>
+          Users
+        </button>
+        <button type="button" className={tab === 'corridors' ? 'active' : ''} onClick={() => setTab('corridors')}>
+          Corridors
+        </button>
         <div className="logout">
           <button type="button" onClick={logout}>Log out {user.full_name ?? user.phone}</button>
         </div>
@@ -1212,6 +1239,20 @@ export default function App() {
               <div className="stat-card"><div className="label">Vehicles</div><div className="value">{dash?.total_vehicles ?? '—'}</div></div>
               <div className="stat-card"><div className="label">Corridors</div><div className="value">{dash?.total_corridors ?? '—'}</div></div>
             </div>
+            <div className="dash-export-row">
+              <button
+                type="button"
+                className="btn-export"
+                onClick={() => {
+                  if (!token) return
+                  void downloadBlob('/admin/incidents/export?limit=100', token, 'reach_incidents_export.csv').catch(
+                    (e: unknown) => setPageErr(e instanceof Error ? e.message : 'Export failed'),
+                  )
+                }}
+              >
+                Export last 100 incidents (CSV)
+              </button>
+            </div>
             <div className="feed">
               <h3>Last 10 incidents (click for detail)</h3>
               <ul>
@@ -1227,6 +1268,27 @@ export default function App() {
             <p className="hint" style={{ marginTop: '1rem', color: 'var(--muted)', fontSize: '0.85rem' }}>
               Health: <code>{API}/api/health</code> · Data via <code>{apiUrl('/admin/dashboard')}</code>
             </p>
+          </>
+        )}
+
+        {tab === 'analytics' && token && (
+          <>
+            {pageErr && <p className="err">{pageErr}</p>}
+            <AnalyticsPage token={token} onError={setPageErr} />
+          </>
+        )}
+
+        {tab === 'broadcast' && token && (
+          <>
+            {pageErr && <p className="err">{pageErr}</p>}
+            <BroadcastPage token={token} onError={setPageErr} />
+          </>
+        )}
+
+        {tab === 'speed_zones' && token && (
+          <>
+            {pageErr && <p className="err">{pageErr}</p>}
+            <SpeedZonesPage token={token} corridors={corridors} onError={setPageErr} />
           </>
         )}
 
