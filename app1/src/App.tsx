@@ -130,11 +130,19 @@ function severityRank(sev: string): number {
   return SEVERITY_ORDER[sev.toLowerCase()] ?? 9
 }
 
-/** Critical → Major → Minor; within severity, oldest first (longest waiting). */
+/** True until dispatch or terminal outcome — “responded” in dispatch-console terms. */
+function isUnrespondedIncident(inc: Incident): boolean {
+  return !['dispatched', 'closed', 'cancelled', 'recalled', 'expired'].includes(inc.status)
+}
+
+/** Critical → Major → Minor; within severity, unresponded before responded; then oldest first. */
 function sortIncidentsByPriority(items: Incident[]): Incident[] {
   return [...items].sort((a, b) => {
     const rs = severityRank(a.severity) - severityRank(b.severity)
     if (rs !== 0) return rs
+    const ua = isUnrespondedIncident(a) ? 0 : 1
+    const ub = isUnrespondedIncident(b) ? 0 : 1
+    if (ua !== ub) return ua - ub
     return +new Date(a.created_at) - +new Date(b.created_at)
   })
 }
@@ -812,7 +820,9 @@ function App() {
               <div className="row">
                 <strong>{i.incident_type}</strong>
                 <div className="chip-row">
-                  {i.severity === 'critical' && <span className="priority-badge">PRIORITY</span>}
+                  {i.severity.toLowerCase() === 'critical' && (
+                    <span className="priority-badge">PRIORITY</span>
+                  )}
                   {isNewIncident(i.created_at) && <span className="new-pill">NEW</span>}
                   <span className="pill" style={{ background: severityColor[i.severity] }}>
                     {i.severity}

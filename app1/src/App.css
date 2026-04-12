@@ -240,8 +240,8 @@ button:disabled {
   font-weight: 800;
   padding: 0.12rem 0.35rem;
   border-radius: 4px;
-  background: #7f1d1d;
-  color: #fecaca;
+  background: #dc2626;
+  color: #fff;
   letter-spacing: 0.04em;
 }
 
