@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.database import engine
-from app.routers import admin, auth, corridors, health, incidents, public, vehicles
+from app.routers import admin, auth, corridors, health, incidents, public, sms, vehicles
 from app.socket_server import sio
 
 fastapi_app = FastAPI(title="REACH API", version="0.1.0")
@@ -23,6 +23,7 @@ api = settings.api_prefix
 # App2 (public SOS) has no login — must stay unauthenticated (see routers/public.py).
 fastapi_app.include_router(health.router, prefix=api)
 fastapi_app.include_router(public.router, prefix=api)
+fastapi_app.include_router(sms.router, prefix=api)
 fastapi_app.include_router(auth.router, prefix=api)
 fastapi_app.include_router(admin.router, prefix=api)
 fastapi_app.include_router(corridors.router, prefix=api)
@@ -43,6 +44,8 @@ def ensure_coordinate_columns() -> None:
         conn.execute(text("ALTER TABLE corridors ADD COLUMN IF NOT EXISTS end_lng DOUBLE PRECISION"))
         conn.execute(text("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION"))
         conn.execute(text("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION"))
+        conn.execute(text("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS source TEXT"))
+        conn.execute(text("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS sos_details JSONB"))
         conn.execute(text("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION"))
         conn.execute(text("ALTER TABLE vehicles ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION"))
         conn.execute(

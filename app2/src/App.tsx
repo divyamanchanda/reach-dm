@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import { apiUrl } from './api'
+import { apiUrl, uploadPublicPhoto } from './api'
 import {
   CRASH_COUNTDOWN_SEC,
   readCrashDetectionEnabled,
@@ -94,6 +94,14 @@ const SEVERITIES = [
   { value: 'minor', label: 'Minor', tone: 'minor' as const },
 ]
 
+const HAZARD_OPTIONS = [
+  { id: 'fire_smoke', label: '🔥 Fire/smoke' },
+  { id: 'fuel_spill', label: '💧 Fuel spill' },
+  { id: 'live_wire', label: '⚡ Live wire down' },
+  { id: 'lane_blocked', label: '🚧 Lane blocked' },
+  { id: 'none_visible', label: 'None visible' },
+] as const
+
 type Phase = 'landing' | 'form' | 'done' | 'offline_saved'
 type LocState = 'pending' | 'ok' | 'fail'
 
@@ -169,6 +177,12 @@ export default function App() {
   const [notes, setNotes] = useState('')
   const [kmMarker, setKmMarker] = useState('')
   const [injuredCount, setInjuredCount] = useState(0)
+  const [skippedMilestone, setSkippedMilestone] = useState(false)
+  const [direction, setDirection] = useState<'towards_chennai' | 'towards_bengaluru' | null>(null)
+  const [hazards, setHazards] = useState<string[]>([])
+  const [vehiclesInvolved, setVehiclesInvolved] = useState(1)
+  const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null)
 
   const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null)
   const [locState, setLocState] = useState<LocState>('pending')
@@ -297,6 +311,15 @@ export default function App() {
     setNotes('')
     setKmMarker('')
     setInjuredCount(0)
+    setSkippedMilestone(false)
+    setDirection(null)
+    setHazards([])
+    setVehiclesInvolved(1)
+    setPhotoFile(null)
+    setPhotoPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
     setIncidentType(INCIDENT_TYPES[0].value)
     setSeverity('major')
     setCorridorId(corridorFromUrl || DEFAULT_CORRIDOR)
@@ -350,6 +373,20 @@ export default function App() {
 
   const kmNum = kmMarker.trim() === '' ? null : Number(kmMarker.trim())
   const kmValid = kmNum != null && Number.isFinite(kmNum)
+  const showManualExtras =
+    phase === 'form' && showManualLocation && (kmValid || skippedMilestone)
+
+  const toggleHazard = (id: string) => {
+    if (id === 'none_visible') {
+      setHazards(['none_visible'])
+      return
+    }
+    setHazards((prev) => {
+      const base = prev.filter((x) => x !== 'none_visible')
+      if (base.includes(id)) return base.filter((x) => x !== id)
+      return [...base, id]
+    })
+  }
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -373,25 +410,42 @@ export default function App() {
       }
     }
 
-    if (showManualLocation) {
-      if (!kmValid) {
-        setError('Enter the number on the nearest green milestone stone.')
-        return
-      }
+    if (!isConnected && photoFile) {
+      setError('Connect to the internet to send a photo with your report.')
+      return
     }
 
     const injured = Math.max(0, Math.min(99, Math.floor(Number(injuredCount)) || 0))
+    const vehicles = Math.max(0, Math.min(99, Math.floor(Number(vehiclesInvolved)) || 1))
+
+    let photo_url: string | undefined
+    if (photoFile) {
+      try {
+        photo_url = await uploadPublicPhoto(photoFile)
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Photo upload failed')
+        return
+      }
+    }
 
     const payloadBody: PendingSosPayload = {
       incident_type: incidentType,
       severity,
       injured_count: injured,
+      vehicles_involved: showManualExtras ? vehicles : 1,
+      hazards: showManualExtras ? [...hazards] : [],
       notes: notes.trim() || undefined,
       latitude: gpsOk ? geo!.lat : undefined,
       longitude: gpsOk ? geo!.lng : undefined,
     }
-    if (showManualLocation && kmValid) {
+    if (showManualExtras && direction) {
+      payloadBody.direction = direction
+    }
+    if (kmValid) {
       payloadBody.km_marker = kmNum!
+    }
+    if (photo_url) {
+      payloadBody.photo_url = photo_url
     }
 
     if (!isConnected) {
@@ -469,6 +523,8 @@ export default function App() {
         incident_type: 'accident',
         severity: 'critical',
         injured_count: 0,
+        vehicles_involved: 1,
+        hazards: [],
         notes: 'Auto-detected crash — no user response',
         latitude: gpsOk ? lat : undefined,
         longitude: gpsOk ? lng : undefined,
@@ -722,18 +778,135 @@ export default function App() {
                   </>
                 ) : null}
                 <label className="sos-km-label">
-                  What number is on the nearest green milestone stone?
+                  <span className="sos-km-label-text">Nearest milestone stone (optional)</span>
+                  <span className="sos-km-hint">If you can&apos;t see one, skip this</span>
                   <input
                     type="number"
                     className="sos-km-input"
                     value={kmMarker}
-                    onChange={(e) => setKmMarker(e.target.value)}
+                    onChange={(e) => {
+                      setKmMarker(e.target.value)
+                      setSkippedMilestone(false)
+                    }}
                     placeholder="e.g. 142"
                     min={0}
                     step="any"
                     inputMode="decimal"
                   />
                 </label>
+                <button
+                  type="button"
+                  className="sos-skip-milestone"
+                  onClick={() => {
+                    setSkippedMilestone(true)
+                    setKmMarker('')
+                  }}
+                >
+                  Can&apos;t see a milestone — skip
+                </button>
+                {showManualExtras ? (
+                  <div className="sos-manual-extras">
+                    <div className="sos-subsection">
+                      <p className="sos-field-label" id="sos-dir-label">
+                        Which direction were you heading?
+                      </p>
+                      <div className="sos-dir-row" role="group" aria-labelledby="sos-dir-label">
+                        <button
+                          type="button"
+                          className={`sos-dir-btn ${direction === 'towards_chennai' ? 'sos-dir-btn--selected' : ''}`}
+                          onClick={() => setDirection('towards_chennai')}
+                        >
+                          ⬆️ Towards Chennai
+                        </button>
+                        <button
+                          type="button"
+                          className={`sos-dir-btn ${direction === 'towards_bengaluru' ? 'sos-dir-btn--selected' : ''}`}
+                          onClick={() => setDirection('towards_bengaluru')}
+                        >
+                          ⬇️ Towards Bengaluru
+                        </button>
+                      </div>
+                    </div>
+                    <div className="sos-subsection">
+                      <p className="sos-field-label" id="sos-hazards-label">
+                        Any hazards visible? (select all that apply)
+                      </p>
+                      <div className="sos-hazard-list" role="group" aria-labelledby="sos-hazards-label">
+                        {HAZARD_OPTIONS.map((h) => (
+                          <label key={h.id} className="sos-hazard-item">
+                            <input
+                              type="checkbox"
+                              checked={hazards.includes(h.id)}
+                              onChange={() => toggleHazard(h.id)}
+                            />
+                            <span>{h.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="sos-subsection">
+                      <p className="sos-field-label">Photo of the scene (optional but very helpful)</p>
+                      <p className="sos-km-hint">A photo helps dispatchers verify and prioritize</p>
+                      <label className="sos-photo-upload">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="sos-photo-input"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0]
+                            if (!f || !f.type.startsWith('image/')) return
+                            setPhotoFile(f)
+                            setPhotoPreviewUrl((prev) => {
+                              if (prev) URL.revokeObjectURL(prev)
+                              return URL.createObjectURL(f)
+                            })
+                          }}
+                        />
+                        <span className="sos-photo-upload-btn">📷 Add photo</span>
+                      </label>
+                      {photoPreviewUrl ? (
+                        <div className="sos-photo-preview-wrap">
+                          <img src={photoPreviewUrl} alt="" className="sos-photo-preview" />
+                          <button
+                            type="button"
+                            className="sos-photo-remove"
+                            onClick={() => {
+                              setPhotoFile(null)
+                              setPhotoPreviewUrl((prev) => {
+                                if (prev) URL.revokeObjectURL(prev)
+                                return null
+                              })
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="sos-subsection">
+                      <label className="sos-injured-label" htmlFor="sos-vehicles">
+                        Vehicles involved
+                      </label>
+                      <input
+                        id="sos-vehicles"
+                        type="number"
+                        className="sos-injured-input"
+                        min={0}
+                        max={99}
+                        value={vehiclesInvolved}
+                        onChange={(e) => {
+                          const n = Number(e.target.value)
+                          if (Number.isNaN(n)) {
+                            setVehiclesInvolved(1)
+                            return
+                          }
+                          setVehiclesInvolved(Math.max(0, Math.min(99, Math.floor(n))))
+                        }}
+                        inputMode="numeric"
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )}
             {needsHighwayWhenGps && (
@@ -762,6 +935,22 @@ export default function App() {
                 ) : null}
               </>
             )}
+            {locState === 'ok' ? (
+              <label className="sos-km-label sos-km-label--spaced">
+                <span className="sos-km-label-text">Nearest milestone stone (optional)</span>
+                <span className="sos-km-hint">If you can&apos;t see one, skip this</span>
+                <input
+                  type="number"
+                  className="sos-km-input"
+                  value={kmMarker}
+                  onChange={(e) => setKmMarker(e.target.value)}
+                  placeholder="e.g. 142"
+                  min={0}
+                  step="any"
+                  inputMode="decimal"
+                />
+              </label>
+            ) : null}
           </div>
 
           {error && <p className="sos-err">{error}</p>}
@@ -769,12 +958,10 @@ export default function App() {
           <button
             type="submit"
             className="sos-submit"
-            disabled={busy || locState === 'pending'}
+            disabled={busy}
             aria-describedby={pendingCount > 0 ? 'sos-pending-reports-badge' : undefined}
           >
-            <span className="sos-submit-label">
-              {busy ? 'Sending…' : locState === 'pending' ? 'Getting location…' : 'Submit emergency report'}
-            </span>
+            <span className="sos-submit-label">{busy ? 'Sending…' : 'Submit emergency report'}</span>
             {pendingCount > 0 ? (
               <span
                 id="sos-pending-reports-badge"

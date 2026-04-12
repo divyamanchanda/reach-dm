@@ -10,6 +10,10 @@ export type PendingSosPayload = {
   latitude?: number
   longitude?: number
   km_marker?: number
+  photo_url?: string
+  direction?: string
+  hazards?: string[]
+  vehicles_involved?: number
 }
 
 export type PendingSos = {

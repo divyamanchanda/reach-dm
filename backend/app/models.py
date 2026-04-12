@@ -87,6 +87,8 @@ class Incident(Base):
     trust_factors: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="open")
     reporter_type: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sos_details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     injured_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     photo_url: Mapped[str | None] = mapped_column(Text, nullable=True)

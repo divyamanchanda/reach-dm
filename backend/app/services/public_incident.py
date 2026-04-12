@@ -15,6 +15,18 @@ from app.services.trust_score import compute_trust_public_sos, count_nearby_repo
 
 SPEED_KMH = 40.0
 
+
+def _sos_details_json(body: PublicIncidentCreate) -> str | None:
+    """Persist direction / hazards / vehicles_involved when any are non-default."""
+    if not body.direction and not body.hazards and body.vehicles_involved == 1:
+        return None
+    payload: dict = {"vehicles_involved": body.vehicles_involved}
+    if body.direction:
+        payload["direction"] = body.direction
+    if body.hazards:
+        payload["hazards"] = body.hazards
+    return json.dumps(payload)
+
 # Great-circle distance in meters (Earth radius 6371 km); matches prior ST_Distance geography behavior closely enough.
 _HAVERSINE_M = """
 (
@@ -110,6 +122,11 @@ def create_public_incident_row(
     db: Session,
     corridor_id: uuid.UUID,
     body: PublicIncidentCreate,
+    *,
+    reporter_type: str = "public_sos",
+    incident_source: str | None = None,
+    is_sms: bool = False,
+    event_source: str = "public_sos",
 ) -> PublicIncidentResponse:
     has_gps = body.latitude is not None and body.longitude is not None
     n_reports = count_nearby_reports(db, corridor_id, body.latitude, body.longitude)
@@ -117,9 +134,11 @@ def create_public_incident_row(
         has_gps=has_gps,
         has_photo=bool(body.photo_url),
         corroboration_count=n_reports,
-        is_sms=False,
+        is_sms=is_sms,
     )
     public_id = secrets.token_hex(4).upper()
+    sd = _sos_details_json(body)
+    sos_sql = "CAST(:sd AS jsonb)" if sd is not None else "NULL"
     params: dict = {
         "cid": str(corridor_id),
         "itype": body.incident_type,
@@ -127,12 +146,15 @@ def create_public_incident_row(
         "km": body.km_marker,
         "ts": tr.score,
         "tr": tr.recommendation,
-        "rep": "public_sos",
+        "rep": reporter_type,
+        "src": incident_source,
         "inj": body.injured_count,
         "notes": body.notes,
         "photo": body.photo_url,
         "pid": public_id,
     }
+    if sd is not None:
+        params["sd"] = sd
     tf_json = json.dumps(tr.factors)
     if has_gps:
         params["lat"] = body.latitude
@@ -146,11 +168,11 @@ def create_public_incident_row(
             INSERT INTO incidents (
               corridor_id, incident_type, severity, km_marker, lat, lng,
               trust_score, trust_recommendation, trust_factors, status, reporter_type,
-              injured_count, notes, photo_url, public_report_id
+              injured_count, notes, photo_url, public_report_id, source, sos_details
             ) VALUES (
               :cid, :itype, :sev, :km, {loc_sql},
               :ts, :tr, CAST(:tf AS jsonb), 'open', :rep,
-              :inj, :notes, :photo, :pid
+              :inj, :notes, :photo, :pid, :src, {sos_sql}
             )
             RETURNING id
             """
@@ -167,7 +189,7 @@ def create_public_incident_row(
         ),
         {
             "iid": str(new_id),
-            "p": json.dumps({"source": "public_sos"}),
+            "p": json.dumps({"source": event_source}),
         },
     )
     db.commit()

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class LoginRequest(BaseModel):
@@ -164,6 +164,9 @@ class VehicleStatusBody(BaseModel):
     status: str
 
 
+_HAZARD_IDS = frozenset({"fire_smoke", "fuel_spill", "live_wire", "lane_blocked", "none_visible"})
+
+
 class PublicIncidentCreate(BaseModel):
     incident_type: str
     severity: str
@@ -173,6 +176,27 @@ class PublicIncidentCreate(BaseModel):
     km_marker: float | None = None
     photo_url: str | None = None
     notes: str | None = None
+    direction: str | None = None
+    hazards: list[str] = Field(default_factory=list)
+    vehicles_involved: int = Field(1, ge=0, le=99)
+
+    @field_validator("direction", mode="before")
+    @classmethod
+    def normalize_direction(cls, v: object) -> str | None:
+        if v is None or v == "":
+            return None
+        s = str(v).strip()
+        if s in ("towards_chennai", "towards_bengaluru"):
+            return s
+        raise ValueError("direction must be towards_chennai or towards_bengaluru")
+
+    @field_validator("hazards", mode="after")
+    @classmethod
+    def normalize_hazards(cls, v: list[str]) -> list[str]:
+        out = [h for h in v if h in _HAZARD_IDS]
+        if "none_visible" in out and len(out) > 1:
+            out = [h for h in out if h != "none_visible"]
+        return sorted(set(out))
 
 
 class PublicIncidentResponse(BaseModel):
@@ -354,3 +378,20 @@ class SpeedZonePatchBody(BaseModel):
     start_km: float | None = Field(None, ge=0)
     end_km: float | None = Field(None, ge=0)
     speed_limit_kph: float | None = Field(None, gt=0, le=200)
+
+
+class SmsTestBody(BaseModel):
+    """Manual test payload for inbound SMS handling."""
+
+    message: str = Field(..., min_length=1)
+    from_: str = Field(..., min_length=5, alias="from", description="Sender phone (E.164 recommended)")
+
+    model_config = {"populate_by_name": True}
+
+
+class SmsIncomingResponse(BaseModel):
+    incident_id: uuid.UUID
+    corridor_id: uuid.UUID
+    public_report_id: str
+    reply_text: str
+    reply_sent: bool

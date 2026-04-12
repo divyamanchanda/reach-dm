@@ -449,6 +449,172 @@
   touch-action: manipulation;
 }
 
+.sos-km-label-text {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #fee2e2;
+}
+
+.sos-km-hint {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1.35;
+  color: #a8a29e;
+  margin-bottom: 0.35rem;
+}
+
+.sos-km-label--spaced {
+  margin-top: 0.75rem;
+}
+
+.sos-skip-milestone {
+  width: 100%;
+  min-height: 2.85rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 12px;
+  border: 2px dashed rgba(254, 202, 202, 0.45);
+  background: rgba(0, 0, 0, 0.2);
+  color: #fde68a;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sos-manual-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  margin-top: 0.35rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(254, 202, 202, 0.2);
+}
+
+.sos-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sos-field-label {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 750;
+  color: #fecaca;
+  line-height: 1.35;
+}
+
+.sos-dir-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+}
+
+.sos-dir-btn {
+  min-height: 4.25rem;
+  padding: 0.75rem 0.5rem;
+  border-radius: 14px;
+  border: 2px solid rgba(254, 202, 202, 0.4);
+  background: rgba(30, 10, 10, 0.65);
+  color: #fff;
+  font-size: clamp(0.95rem, 3.8vw, 1.08rem);
+  font-weight: 800;
+  line-height: 1.25;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sos-dir-btn--selected {
+  border-color: #fff;
+  background: linear-gradient(145deg, #dc2626 0%, #991b1b 100%);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.2);
+}
+
+.sos-hazard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.sos-hazard-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid rgba(254, 202, 202, 0.35);
+  background: rgba(0, 0, 0, 0.15);
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff8f8;
+  cursor: pointer;
+}
+
+.sos-hazard-item input {
+  width: 1.15rem;
+  height: 1.15rem;
+  accent-color: #ef4444;
+}
+
+.sos-photo-upload {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 3.25rem;
+  border-radius: 12px;
+  border: 2px solid rgba(254, 202, 202, 0.45);
+  background: rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+}
+
+.sos-photo-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.sos-photo-upload-btn {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #fde68a;
+  pointer-events: none;
+}
+
+.sos-photo-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.sos-photo-preview {
+  width: 100%;
+  max-height: 14rem;
+  object-fit: contain;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.sos-photo-remove {
+  align-self: flex-start;
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(254, 202, 202, 0.5);
+  background: transparent;
+  color: #fecaca;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .sos-km-input {
   min-height: 3rem;
   padding: 0.65rem 0.75rem;

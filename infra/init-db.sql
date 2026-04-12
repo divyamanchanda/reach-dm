@@ -66,6 +66,8 @@ CREATE TABLE incidents (
   trust_factors JSONB NOT NULL DEFAULT '[]'::jsonb,
   status TEXT NOT NULL DEFAULT 'open',
   reporter_type TEXT NOT NULL,
+  source TEXT,
+  sos_details JSONB,
   injured_count INTEGER NOT NULL DEFAULT 0,
   notes TEXT,
   photo_url TEXT,

@@ -43,6 +43,21 @@ class Settings(BaseSettings):
     )
     routing_base_url: str = "https://router.project-osrm.org"
 
+    # Outbound SMS replies (Twilio or MSG91). If unset, replies are logged only.
+    sms_provider: str | None = Field(default=None, validation_alias=AliasChoices("SMS_PROVIDER"))
+    twilio_account_sid: str | None = Field(default=None, validation_alias=AliasChoices("TWILIO_ACCOUNT_SID"))
+    twilio_auth_token: str | None = Field(default=None, validation_alias=AliasChoices("TWILIO_AUTH_TOKEN"))
+    twilio_from_number: str | None = Field(default=None, validation_alias=AliasChoices("TWILIO_FROM_NUMBER"))
+    msg91_auth_key: str | None = Field(default=None, validation_alias=AliasChoices("MSG91_AUTH_KEY"))
+    msg91_sender_id: str | None = Field(default=None, validation_alias=AliasChoices("MSG91_SENDER_ID"))
+    msg91_route: str | None = Field(default="4", validation_alias=AliasChoices("MSG91_ROUTE"))
+
+    public_upload_dir: str = Field(
+        default="data/public_uploads",
+        validation_alias=AliasChoices("PUBLIC_UPLOAD_DIR"),
+        description="Directory for App2 public SOS photo uploads (created on startup).",
+    )
+
     @field_validator("api_prefix", mode="after")
     @classmethod
     def normalize_api_prefix(cls, v: str) -> str:
