@@ -196,19 +196,14 @@ function buildIncidentTimelineSteps(detail: IncidentDetail): TimelineStep[] {
 
 function playNewIncidentBeep(): void {
   try {
-    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-    if (!Ctx) return
-    const ctx = new Ctx()
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.type = 'sine'
-    osc.frequency.value = 880
-    gain.gain.value = 0.09
-    osc.start()
-    osc.stop(ctx.currentTime + 0.12)
-    osc.onended = () => ctx.close()
+    const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AC) return
+    const ctx = new AC()
+    const o = ctx.createOscillator()
+    o.connect(ctx.destination)
+    o.start()
+    o.stop(ctx.currentTime + 0.3)
+    o.onended = () => ctx.close()
   } catch {
     /* ignore */
   }
@@ -493,7 +488,7 @@ function App() {
       }
       bump()
     }
-    s.on('incident:new', bump)
+    s.on('incident:new', onNewIncident)
     s.on('incident:updated', bump)
     s.on('incident:dispatched', onDispatched)
     s.on('incident:recalled', bump)
