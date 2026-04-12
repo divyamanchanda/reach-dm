@@ -41,42 +41,6 @@
   border-bottom: 1px solid #991b1b;
 }
 
-/* Second fixed strip: GPS status (independent of internet banner above). */
-.sos-gps-strip {
-  position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 2.45rem);
-  left: 0;
-  right: 0;
-  z-index: 399;
-  padding: 0.45rem 0.85rem;
-  font-size: 0.82rem;
-  font-weight: 700;
-  text-align: center;
-  line-height: 1.35;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
-}
-
-.sos-gps-strip--pending {
-  background: rgba(30, 27, 75, 0.92);
-  color: #c4b5fd;
-}
-
-.sos-gps-strip--ok {
-  background: rgba(20, 83, 45, 0.92);
-  color: #bbf7d0;
-  border-bottom-color: #166534;
-}
-
-.sos-gps-strip--warn {
-  background: rgba(120, 53, 15, 0.92);
-  color: #fde68a;
-  border-bottom-color: #b45309;
-}
-
-.sos-app--form-gps {
-  padding-top: calc(4.85rem + env(safe-area-inset-top, 0px));
-}
-
 .sos-delivered-banner {
   position: fixed;
   top: 3rem;

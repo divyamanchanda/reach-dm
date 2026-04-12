@@ -153,14 +153,6 @@ function HighwayButtonList({
   )
 }
 
-function HighwayDetectedLine({ name }: { name: string }) {
-  return (
-    <p className="sos-hw-detected">
-      <span className="sos-hw-detected-prefix">Highway:</span> {name}
-    </p>
-  )
-}
-
 export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
   const corridorFromUrl = (params.get('corridor') || '').trim()
@@ -177,7 +169,6 @@ export default function App() {
   const [notes, setNotes] = useState('')
   const [kmMarker, setKmMarker] = useState('')
   const [injuredCount, setInjuredCount] = useState(0)
-  const [skippedMilestone, setSkippedMilestone] = useState(false)
   const [direction, setDirection] = useState<'towards_chennai' | 'towards_bengaluru' | null>(null)
   const [hazards, setHazards] = useState<string[]>([])
   const [vehiclesInvolved, setVehiclesInvolved] = useState(1)
@@ -311,7 +302,6 @@ export default function App() {
     setNotes('')
     setKmMarker('')
     setInjuredCount(0)
-    setSkippedMilestone(false)
     setDirection(null)
     setHazards([])
     setVehiclesInvolved(1)
@@ -357,26 +347,19 @@ export default function App() {
     setCorridorId(corridors[0].id)
   }, [phase, corridorId, corridors])
 
-  /** GPS fix — independent of internet connectivity (`isConnected`). */
   const gpsOk = locState === 'ok' && geo != null
   const gpsFailed = locState === 'fail'
-  const soleCorridor = corridors.length === 1 ? corridors[0] : null
-  const soleHighwayResolved =
-    Boolean(soleCorridor && corridorId === soleCorridor.id && !corridorsLoading)
   const needsHighwayWhenGps =
     phase === 'form' &&
     locState === 'ok' &&
     !corridorFromUrl &&
     !DEFAULT_CORRIDOR &&
     corridors.length > 1
-  /** Milestone + direction/hazards/photo/vehicles: only when geolocation failed — not when offline. */
-  const showGpsFallbackFields = phase === 'form' && gpsFailed
   const showMultiHighwayPicker =
-    !corridorsLoading && corridors.length > 1 && (showGpsFallbackFields || needsHighwayWhenGps)
+    !corridorsLoading && corridors.length > 1 && (gpsFailed || needsHighwayWhenGps)
 
   const kmNum = kmMarker.trim() === '' ? null : Number(kmMarker.trim())
   const kmValid = kmNum != null && Number.isFinite(kmNum)
-  const showManualExtras = showGpsFallbackFields && (kmValid || skippedMilestone)
 
   const toggleHazard = (id: string) => {
     if (id === 'none_visible') {
@@ -405,7 +388,7 @@ export default function App() {
       return
     }
 
-    if (showGpsFallbackFields || needsHighwayWhenGps) {
+    if (gpsFailed || needsHighwayWhenGps) {
       if (!corridorId && corridors.length > 1) {
         setError('Choose your highway from the list.')
         return
@@ -434,13 +417,13 @@ export default function App() {
       incident_type: incidentType,
       severity,
       injured_count: injured,
-      vehicles_involved: showManualExtras ? vehicles : 1,
-      hazards: showManualExtras ? [...hazards] : [],
+      vehicles_involved: vehicles,
+      hazards: [...hazards],
       notes: notes.trim() || undefined,
       latitude: gpsOk ? geo!.lat : undefined,
       longitude: gpsOk ? geo!.lng : undefined,
     }
-    if (showManualExtras && direction) {
+    if (direction) {
       payloadBody.direction = direction
     }
     if (kmValid) {
@@ -596,9 +579,7 @@ export default function App() {
   }
 
   return (
-    <div
-      className={`sos-app ${deliveredBanner ? 'sos-app--delivered' : ''} ${phase === 'form' ? 'sos-app--form-gps' : ''}`}
-    >
+    <div className={`sos-app ${deliveredBanner ? 'sos-app--delivered' : ''}`}>
       <div
         className={`sos-net-banner ${isConnected ? 'sos-net-banner--ok' : 'sos-net-banner--bad'}`}
         role="status"
@@ -608,23 +589,6 @@ export default function App() {
           ? '🟢 Internet connected — SOS will send instantly'
           : '🔴 No internet — SMS fallback active'}
       </div>
-      {phase === 'form' ? (
-        <div
-          className={`sos-gps-strip ${
-            locState === 'ok' ? 'sos-gps-strip--ok' : locState === 'fail' ? 'sos-gps-strip--warn' : 'sos-gps-strip--pending'
-          }`}
-          role="status"
-          aria-live="polite"
-        >
-          {locState === 'pending' ? (
-            <span>📍 GPS: Acquiring…</span>
-          ) : locState === 'ok' ? (
-            <span>📍 GPS: Captured ✓</span>
-          ) : (
-            <span>📍 GPS: Not available — please use milestone below</span>
-          )}
-        </div>
-      ) : null}
       {deliveredBanner ? (
         <div className="sos-delivered-banner" role="status">
           {deliveredBanner}
@@ -734,17 +698,67 @@ export default function App() {
           </div>
 
           <div className="sos-section">
-            <label className="sos-notes-label">
-              Anything else? <span className="optional">(optional)</span>
-              <textarea
-                className="sos-notes"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={3}
-                placeholder="e.g. lane blocked, smoke visible…"
-                autoComplete="off"
-              />
+            <label className="sos-injured-label" htmlFor="sos-vehicles">
+              Vehicles involved
             </label>
+            <input
+              id="sos-vehicles"
+              type="number"
+              className="sos-injured-input"
+              min={0}
+              max={99}
+              value={vehiclesInvolved}
+              onChange={(e) => {
+                const n = Number(e.target.value)
+                if (Number.isNaN(n)) {
+                  setVehiclesInvolved(1)
+                  return
+                }
+                setVehiclesInvolved(Math.max(0, Math.min(99, Math.floor(n))))
+              }}
+              inputMode="numeric"
+            />
+          </div>
+
+          <div className="sos-section">
+            <p className="sos-field-label">Add photo</p>
+            <p className="sos-km-hint">Optional — helps dispatchers verify and prioritize</p>
+            <label className="sos-photo-upload">
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="sos-photo-input"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (!f || !f.type.startsWith('image/')) return
+                  setPhotoFile(f)
+                  setPhotoPreviewUrl((prev) => {
+                    if (prev) URL.revokeObjectURL(prev)
+                    return URL.createObjectURL(f)
+                  })
+                }}
+              />
+              <span className="sos-photo-upload-btn">📷 Add photo</span>
+            </label>
+            {photoPreviewUrl ? (
+              <div className="sos-photo-preview-wrap">
+                <img src={photoPreviewUrl} alt="" className="sos-photo-preview" />
+                <button
+                  type="button"
+                  className="sos-photo-remove"
+                  onClick={() => {
+                    setPhotoFile(null)
+                    setPhotoPreviewUrl((prev) => {
+                      if (prev) URL.revokeObjectURL(prev)
+                      return null
+                    })
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+            ) : null}
           </div>
 
           <div className="sos-section sos-location-card">
@@ -757,8 +771,34 @@ export default function App() {
             )}
             {locState === 'ok' && (
               <>
-                {soleHighwayResolved && soleCorridor ? (
-                  <HighwayDetectedLine name={soleCorridor.name} />
+                <p className="loc-ok" role="status">
+                  📍 GPS location captured ✓
+                </p>
+                {needsHighwayWhenGps ? (
+                  <>
+                    {corridorsLoading && <p className="sos-warn">Loading highways…</p>}
+                    {corridorsError && !corridorsLoading && <p className="sos-warn">{corridorsError}</p>}
+                    {!corridorsLoading && (corridorsError || corridors.length === 0) && (
+                      <button
+                        type="button"
+                        className="sos-retry-hw"
+                        onClick={() => setCorridorsRetryKey((k) => k + 1)}
+                      >
+                        Reload highway list
+                      </button>
+                    )}
+                    {showMultiHighwayPicker ? (
+                      <>
+                        <p className="sos-hw-prompt">Which highway are you on? Tap yours below.</p>
+                        <HighwayButtonList
+                          corridors={corridors}
+                          selectedId={corridorId}
+                          onSelect={setCorridorId}
+                          disabled={corridorsLoading}
+                        />
+                      </>
+                    ) : null}
+                  </>
                 ) : null}
               </>
             )}
@@ -778,9 +818,6 @@ export default function App() {
                     Reload highway list
                   </button>
                 )}
-                {soleHighwayResolved && soleCorridor ? (
-                  <HighwayDetectedLine name={soleCorridor.name} />
-                ) : null}
                 {showMultiHighwayPicker ? (
                   <>
                     <p className="sos-hw-prompt">Highway — tap the one you are on</p>
@@ -793,179 +830,75 @@ export default function App() {
                   </>
                 ) : null}
                 <label className="sos-km-label">
-                  <span className="sos-km-label-text">Nearest milestone stone (optional)</span>
-                  <span className="sos-km-hint">If you can&apos;t see one, skip this</span>
+                  <span className="sos-km-label-text">Milestone number (optional)</span>
+                  <span className="sos-km-hint">If you can see a green milestone stone, enter the number</span>
                   <input
                     type="number"
                     className="sos-km-input"
                     value={kmMarker}
-                    onChange={(e) => {
-                      setKmMarker(e.target.value)
-                      setSkippedMilestone(false)
-                    }}
+                    onChange={(e) => setKmMarker(e.target.value)}
                     placeholder="e.g. 142"
                     min={0}
                     step="any"
                     inputMode="decimal"
                   />
                 </label>
-                <button
-                  type="button"
-                  className="sos-skip-milestone"
-                  onClick={() => {
-                    setSkippedMilestone(true)
-                    setKmMarker('')
-                  }}
-                >
-                  Can&apos;t see a milestone — skip
-                </button>
-                {showManualExtras ? (
-                  <div className="sos-manual-extras">
-                    <div className="sos-subsection">
-                      <p className="sos-field-label" id="sos-dir-label">
-                        Which direction were you heading?
-                      </p>
-                      <div className="sos-dir-row" role="group" aria-labelledby="sos-dir-label">
-                        <button
-                          type="button"
-                          className={`sos-dir-btn ${direction === 'towards_chennai' ? 'sos-dir-btn--selected' : ''}`}
-                          onClick={() => setDirection('towards_chennai')}
-                        >
-                          ⬆️ Towards Chennai
-                        </button>
-                        <button
-                          type="button"
-                          className={`sos-dir-btn ${direction === 'towards_bengaluru' ? 'sos-dir-btn--selected' : ''}`}
-                          onClick={() => setDirection('towards_bengaluru')}
-                        >
-                          ⬇️ Towards Bengaluru
-                        </button>
-                      </div>
-                    </div>
-                    <div className="sos-subsection">
-                      <p className="sos-field-label" id="sos-hazards-label">
-                        Any hazards visible? (select all that apply)
-                      </p>
-                      <div className="sos-hazard-list" role="group" aria-labelledby="sos-hazards-label">
-                        {HAZARD_OPTIONS.map((h) => (
-                          <label key={h.id} className="sos-hazard-item">
-                            <input
-                              type="checkbox"
-                              checked={hazards.includes(h.id)}
-                              onChange={() => toggleHazard(h.id)}
-                            />
-                            <span>{h.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="sos-subsection">
-                      <p className="sos-field-label">Photo of the scene (optional but very helpful)</p>
-                      <p className="sos-km-hint">A photo helps dispatchers verify and prioritize</p>
-                      <label className="sos-photo-upload">
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="sos-photo-input"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0]
-                            if (!f || !f.type.startsWith('image/')) return
-                            setPhotoFile(f)
-                            setPhotoPreviewUrl((prev) => {
-                              if (prev) URL.revokeObjectURL(prev)
-                              return URL.createObjectURL(f)
-                            })
-                          }}
-                        />
-                        <span className="sos-photo-upload-btn">📷 Add photo</span>
-                      </label>
-                      {photoPreviewUrl ? (
-                        <div className="sos-photo-preview-wrap">
-                          <img src={photoPreviewUrl} alt="" className="sos-photo-preview" />
-                          <button
-                            type="button"
-                            className="sos-photo-remove"
-                            onClick={() => {
-                              setPhotoFile(null)
-                              setPhotoPreviewUrl((prev) => {
-                                if (prev) URL.revokeObjectURL(prev)
-                                return null
-                              })
-                            }}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="sos-subsection">
-                      <label className="sos-injured-label" htmlFor="sos-vehicles">
-                        Vehicles involved
-                      </label>
-                      <input
-                        id="sos-vehicles"
-                        type="number"
-                        className="sos-injured-input"
-                        min={0}
-                        max={99}
-                        value={vehiclesInvolved}
-                        onChange={(e) => {
-                          const n = Number(e.target.value)
-                          if (Number.isNaN(n)) {
-                            setVehiclesInvolved(1)
-                            return
-                          }
-                          setVehiclesInvolved(Math.max(0, Math.min(99, Math.floor(n))))
-                        }}
-                        inputMode="numeric"
-                      />
-                    </div>
-                  </div>
-                ) : null}
               </div>
             )}
-            {needsHighwayWhenGps && (
-              <>
-                {corridorsLoading && <p className="sos-warn">Loading highways…</p>}
-                {corridorsError && !corridorsLoading && <p className="sos-warn">{corridorsError}</p>}
-                {!corridorsLoading && (corridorsError || corridors.length === 0) && (
-                  <button
-                    type="button"
-                    className="sos-retry-hw"
-                    onClick={() => setCorridorsRetryKey((k) => k + 1)}
-                  >
-                    Reload highway list
-                  </button>
-                )}
-                {showMultiHighwayPicker ? (
-                  <>
-                    <p className="sos-hw-prompt">Which highway are you on? Tap yours below.</p>
-                    <HighwayButtonList
-                      corridors={corridors}
-                      selectedId={corridorId}
-                      onSelect={setCorridorId}
-                      disabled={corridorsLoading}
-                    />
-                  </>
-                ) : null}
-              </>
-            )}
-            {locState === 'ok' ? (
-              <label className="sos-km-label sos-km-label--spaced">
-                <span className="sos-km-label-text">Nearest milestone stone (optional)</span>
-                <span className="sos-km-hint">If you can&apos;t see one, skip this</span>
-                <input
-                  type="number"
-                  className="sos-km-input"
-                  value={kmMarker}
-                  onChange={(e) => setKmMarker(e.target.value)}
-                  placeholder="e.g. 142"
-                  min={0}
-                  step="any"
-                  inputMode="decimal"
-                />
-              </label>
-            ) : null}
+          </div>
+
+          <div className="sos-section">
+            <p className="sos-field-label" id="sos-dir-label">
+              Which direction were you heading?
+            </p>
+            <div className="sos-dir-row" role="group" aria-labelledby="sos-dir-label">
+              <button
+                type="button"
+                className={`sos-dir-btn ${direction === 'towards_chennai' ? 'sos-dir-btn--selected' : ''}`}
+                onClick={() => setDirection('towards_chennai')}
+              >
+                ⬆️ Towards Chennai
+              </button>
+              <button
+                type="button"
+                className={`sos-dir-btn ${direction === 'towards_bengaluru' ? 'sos-dir-btn--selected' : ''}`}
+                onClick={() => setDirection('towards_bengaluru')}
+              >
+                ⬇️ Towards Bengaluru
+              </button>
+            </div>
+          </div>
+
+          <div className="sos-section">
+            <p className="sos-field-label" id="sos-hazards-label">
+              Any hazards visible?
+            </p>
+            <div className="sos-hazard-list" role="group" aria-labelledby="sos-hazards-label">
+              {HAZARD_OPTIONS.map((h) => (
+                <label key={h.id} className="sos-hazard-item">
+                  <input
+                    type="checkbox"
+                    checked={hazards.includes(h.id)}
+                    onChange={() => toggleHazard(h.id)}
+                  />
+                  <span>{h.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="sos-section">
+            <label className="sos-notes-label">
+              Anything else? <span className="optional">(optional)</span>
+              <textarea
+                className="sos-notes"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={3}
+                placeholder="e.g. lane blocked, smoke visible…"
+                autoComplete="off"
+              />
+            </label>
           </div>
 
           {error && <p className="sos-err">{error}</p>}
