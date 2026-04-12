@@ -119,13 +119,15 @@ def list_incidents(
                 status=inc.status,
                 reporter_type=inc.reporter_type,
                 injured_count=inc.injured_count,
+                notes=inc.notes,
                 public_report_id=inc.public_report_id,
                 created_at=inc.created_at,
                 updated_at=inc.updated_at,
                 eligible_for_reassign=eligible,
             )
         )
-    items.sort(key=lambda x: x.created_at, reverse=True)
+    # Critical → Major → Minor; within same severity, oldest first (longest waiting).
+    items.sort(key=lambda x: x.created_at)
     items.sort(key=lambda x: _severity_rank(x.severity))
     return items
 

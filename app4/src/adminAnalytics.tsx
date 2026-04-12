@@ -1,6 +1,6 @@
 import type { FormEvent } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { deleteJson, fetchJson, patchJson, postJson } from './api'
+import { deleteJson, fetchJson, isSessionExpiredError, patchJson, postJson } from './api'
 
 const NH48_KM = 312
 const SEG_KM = 20
@@ -147,6 +147,7 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
       setData(await fetchJson<AdminAnalytics>('/admin/analytics', token))
       onError(null)
     } catch (e: unknown) {
+      if (isSessionExpiredError(e)) return
       onError(e instanceof Error ? e.message : 'Failed to load analytics')
     }
   }, [token, onError])
@@ -246,6 +247,7 @@ export function BroadcastPage({
       await postJson('/admin/broadcast', token, { message: msg.trim() })
       setMsg('')
     } catch (err: unknown) {
+      if (isSessionExpiredError(err)) return
       onError(err instanceof Error ? err.message : 'Broadcast failed')
     } finally {
       setSending(false)
@@ -300,6 +302,7 @@ export function SpeedZonesPage({
     try {
       setZones(await fetchJson<SpeedZoneRow[]>('/admin/speed-zones', token))
     } catch (e: unknown) {
+      if (isSessionExpiredError(e)) return
       onError(e instanceof Error ? e.message : 'Failed to load zones')
     } finally {
       setLoading(false)
@@ -327,6 +330,7 @@ export function SpeedZonesPage({
       })
       await load()
     } catch (err: unknown) {
+      if (isSessionExpiredError(err)) return
       onError(err instanceof Error ? err.message : 'Failed to add zone')
     }
   }
@@ -342,6 +346,7 @@ export function SpeedZonesPage({
       setEditingId(null)
       await load()
     } catch (err: unknown) {
+      if (isSessionExpiredError(err)) return
       onError(err instanceof Error ? err.message : 'Failed to update')
     }
   }
@@ -353,6 +358,7 @@ export function SpeedZonesPage({
       await deleteJson(`/admin/speed-zones/${id}`, token)
       await load()
     } catch (err: unknown) {
+      if (isSessionExpiredError(err)) return
       onError(err instanceof Error ? err.message : 'Failed to delete')
     }
   }

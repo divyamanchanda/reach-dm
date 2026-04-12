@@ -9,7 +9,15 @@ from sqlalchemy.orm import Session, selectinload
 from app.database import get_db
 from app.geo_utils import incident_lat_lng
 from app.models import Incident, IncidentEvent, User
-from app.schemas import DispatchBody, IncidentDetailOut, IncidentStatusBody, IncidentVerifyBody, NearbyVehicleOut, TimelineEventOut
+from app.schemas import (
+    DispatchBody,
+    IncidentDetailOut,
+    IncidentPatchBody,
+    IncidentStatusBody,
+    IncidentVerifyBody,
+    NearbyVehicleOut,
+    TimelineEventOut,
+)
 from app.security import get_current_user, require_role
 from app.services.dispatch import run_dispatch
 from app.services.incident_lifecycle import driver_decline_incident, reassign_incident
@@ -76,6 +84,30 @@ def get_incident(
     inc = db.execute(stmt).scalar_one_or_none()
     if not inc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+    return incident_to_detail_out(db, inc)
+
+
+@router.patch("/{incident_id}", response_model=IncidentDetailOut)
+def patch_incident(
+    incident_id: uuid.UUID,
+    body: IncidentPatchBody,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_role("dispatch_operator")),
+):
+    data = body.model_dump(exclude_unset=True)
+    if not data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields to update")
+    inc = db.get(Incident, incident_id)
+    if not inc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+    if "notes" in data:
+        inc.notes = data["notes"]
+    db.commit()
+    stmt = select(Incident).where(Incident.id == incident_id).options(selectinload(Incident.events))
+    inc = db.execute(stmt).scalar_one()
+    background_tasks.add_task(_push_incident_updated, inc.corridor_id, {"incident_id": str(incident_id)})
+    background_tasks.add_task(_push_corridor_stats, inc.corridor_id)
     return incident_to_detail_out(db, inc)
 
 

@@ -39,6 +39,7 @@ type Incident = {
   created_at: string
   updated_at: string
   eligible_for_reassign?: boolean
+  notes?: string | null
 }
 
 type Stats = {
@@ -54,6 +55,8 @@ type CorridorVehicle = {
   vehicle_type: string
   status: string
   is_available: boolean
+  latitude: number | null
+  longitude: number | null
 }
 
 type NearbyVehicle = {
@@ -121,8 +124,124 @@ function isNewIncident(createdAt: string): boolean {
   return ageMs <= 5 * 60 * 1000
 }
 
-function sortIncidentsByCreatedAtDesc(items: Incident[]): Incident[] {
-  return [...items].sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
+const SEVERITY_ORDER: Record<string, number> = { critical: 0, major: 1, minor: 2 }
+
+function severityRank(sev: string): number {
+  return SEVERITY_ORDER[sev.toLowerCase()] ?? 9
+}
+
+/** Critical → Major → Minor; within severity, oldest first (longest waiting). */
+function sortIncidentsByPriority(items: Incident[]): Incident[] {
+  return [...items].sort((a, b) => {
+    const rs = severityRank(a.severity) - severityRank(b.severity)
+    if (rs !== 0) return rs
+    return +new Date(a.created_at) - +new Date(b.created_at)
+  })
+}
+
+const AVG_CORRIDOR_KMH = 80
+
+function kmFromLatLng(lat: number, lng: number): number {
+  const bengaluru = { lat: 12.9716, lng: 77.5946 }
+  const chennai = { lat: 13.0827, lng: 80.2707 }
+  const nh48Km = 312
+  const dx = chennai.lng - bengaluru.lng
+  const dy = chennai.lat - bengaluru.lat
+  const px = lng - bengaluru.lng
+  const py = lat - bengaluru.lat
+  const denom = dx * dx + dy * dy
+  const t = denom > 0 ? Math.max(0, Math.min(1, (px * dx + py * dy) / denom)) : 0
+  return t * nh48Km
+}
+
+function etaMinutesFromKmGap(kmA: number, kmB: number): number {
+  return Math.max(1, Math.round((Math.abs(kmA - kmB) / AVG_CORRIDOR_KMH) * 60))
+}
+
+function formatShortTime(d: Date): string {
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+type TimelineStep = { key: string; label: string; at: Date | null; done: boolean }
+
+function buildIncidentTimelineSteps(detail: IncidentDetail): TimelineStep[] {
+  const reported = new Date(detail.created_at)
+  let dispatchedAt: Date | null = null
+  let acceptedAt: Date | null = null
+  let arrivedAt: Date | null = null
+  let clearedAt: Date | null = null
+
+  const events = [...detail.timeline].sort(
+    (a, b) => +new Date(a.created_at) - +new Date(b.created_at),
+  )
+  for (const ev of events) {
+    if (ev.event_type === 'dispatch') dispatchedAt = new Date(ev.created_at)
+    if (ev.event_type === 'status_change' && ev.payload && typeof ev.payload === 'object') {
+      const st = (ev.payload as { status?: string }).status
+      if (st === 'accepted' || st === 'en_route') acceptedAt = new Date(ev.created_at)
+      if (st === 'arrived') arrivedAt = new Date(ev.created_at)
+      if (st === 'closed') clearedAt = new Date(ev.created_at)
+    }
+  }
+  if (detail.status === 'closed' && !clearedAt) clearedAt = new Date(detail.updated_at)
+
+  return [
+    { key: 'reported', label: 'Reported', at: reported, done: true },
+    { key: 'dispatched', label: 'Dispatched', at: dispatchedAt, done: dispatchedAt != null },
+    { key: 'accepted', label: 'Driver accepted', at: acceptedAt, done: acceptedAt != null },
+    { key: 'arrived', label: 'Arrived', at: arrivedAt, done: arrivedAt != null },
+    { key: 'cleared', label: 'Cleared', at: clearedAt, done: clearedAt != null },
+  ]
+}
+
+function playNewIncidentBeep(): void {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Ctx) return
+    const ctx = new Ctx()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.type = 'sine'
+    osc.frequency.value = 880
+    gain.gain.value = 0.09
+    osc.start()
+    osc.stop(ctx.currentTime + 0.12)
+    osc.onended = () => ctx.close()
+  } catch {
+    /* ignore */
+  }
+}
+
+const SHIFT_NOTES_KEY = 'reach_dispatch_shift_notes_v1'
+const SHIFT_HANDOVER_KEY = 'reach_dispatch_shift_handover_v1'
+
+function isPendingDispatchStatus(status: string): boolean {
+  return ['open', 'verifying', 'confirmed_real'].includes(status)
+}
+
+function dispatchUrgencyClass(createdAt: string, status: string): '' | 'inc-card--urgent-warn' | 'inc-card--urgent-crit' {
+  if (!isPendingDispatchStatus(status)) return ''
+  const ageMin = (Date.now() - new Date(createdAt).getTime()) / 60000
+  if (ageMin > 10) return 'inc-card--urgent-crit'
+  if (ageMin > 5) return 'inc-card--urgent-warn'
+  return ''
+}
+
+function incidentCardEta(
+  i: Incident,
+  assigned: AssignedVehicle | undefined,
+  vehicles: CorridorVehicle[],
+): string | null {
+  if (i.status !== 'dispatched' || !assigned) return null
+  if (i.km_marker == null || !Number.isFinite(i.km_marker)) return null
+  const v = vehicles.find((x) => x.id === assigned.vehicle_id)
+  if (v?.latitude == null || v?.longitude == null) return null
+  if (!Number.isFinite(v.latitude) || !Number.isFinite(v.longitude)) return null
+  const vk = kmFromLatLng(v.latitude, v.longitude)
+  const mins = etaMinutesFromKmGap(vk, i.km_marker)
+  return `ETA: ${mins} mins`
 }
 
 function statusLabel(status: string): string {
@@ -248,6 +367,27 @@ function App() {
   const [assignedVehicleByIncidentId, setAssignedVehicleByIncidentId] = useState<
     Record<string, AssignedVehicle>
   >({})
+  const [corridorVehicles, setCorridorVehicles] = useState<CorridorVehicle[]>([])
+  const [expandedTimelineId, setExpandedTimelineId] = useState<string | null>(null)
+  const [timelineById, setTimelineById] = useState<Record<string, IncidentDetail>>({})
+  const [etaTick, setEtaTick] = useState(0)
+  const [shiftNotes, setShiftNotes] = useState(() => localStorage.getItem(SHIFT_NOTES_KEY) ?? '')
+  const [shiftNotesEditedAt, setShiftNotesEditedAt] = useState<string | null>(() =>
+    localStorage.getItem('reach_shift_notes_edit_v1'),
+  )
+  const [shiftHandoverLine, setShiftHandoverLine] = useState<string | null>(() => {
+    const raw = localStorage.getItem(SHIFT_HANDOVER_KEY)
+    if (!raw) return null
+    try {
+      const j = JSON.parse(raw) as { at?: string; by?: string }
+      if (j.at && j.by) return `Handed over by ${j.by} at ${new Date(j.at).toLocaleString()}`
+    } catch {
+      /* ignore */
+    }
+    return null
+  })
+  const [operatorNoteDraft, setOperatorNoteDraft] = useState<Record<string, string>>({})
+  const [savingNotesForId, setSavingNotesForId] = useState<string | null>(null)
   /** Re-render periodically: NEW badges, and client-side 2h expiry vs created_at. */
   const [_newBadgeTick, setNewBadgeTick] = useState(0)
   const [, setAgeTick] = useState(0)
@@ -259,7 +399,12 @@ function App() {
     return () => window.clearInterval(id)
   }, [])
 
-  const sortedIncidents = useMemo(() => sortIncidentsByCreatedAtDesc(incidents), [incidents])
+  useEffect(() => {
+    const id = window.setInterval(() => setEtaTick((n) => n + 1), 30_000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const sortedIncidents = useMemo(() => sortIncidentsByPriority(incidents), [incidents])
 
   const selected = useMemo(
     () => incidents.find((i) => i.id === selectedId) ?? null,
@@ -276,6 +421,7 @@ function App() {
       setStats(st)
       fetchJson<CorridorVehicle[]>(`/corridors/${cid}/vehicles`, t)
         .then((vehicles) => {
+          setCorridorVehicles(vehicles)
           const map: Record<string, string> = {}
           for (const vehicle of vehicles) map[vehicle.id] = vehicle.label
           setVehicleLabelById(map)
@@ -326,6 +472,10 @@ function App() {
       s.emit('subscribe_corridor', { corridor_id: corridorId })
     })
     const bump = () => refreshLists(corridorId, token).catch(() => {})
+    const onNewIncident = () => {
+      playNewIncidentBeep()
+      bump()
+    }
     const onDispatched = (payload: { incident_id?: string; vehicle_id?: string }) => {
       if (payload?.incident_id && payload?.vehicle_id) {
         setAssignedVehicleByIncidentId((prev) => ({
@@ -350,6 +500,7 @@ function App() {
     s.on('corridor:stats', bump)
     setSocket(s)
     return () => {
+      s.off('incident:new', onNewIncident)
       s.off('incident:dispatched', onDispatched)
       s.emit('unsubscribe_corridor', { corridor_id: corridorId })
       s.disconnect()
@@ -366,6 +517,23 @@ function App() {
       .then(setIncidentDetail)
       .catch(() => setIncidentDetail(null))
   }, [token, selectedId])
+
+  useEffect(() => {
+    if (!token || !expandedTimelineId) return
+    if (expandedTimelineId === selectedId && incidentDetail?.id === expandedTimelineId) {
+      setTimelineById((prev) => ({ ...prev, [expandedTimelineId]: incidentDetail }))
+      return
+    }
+    let cancelled = false
+    fetchJson<IncidentDetail>(`/incidents/${expandedTimelineId}`, token)
+      .then((d) => {
+        if (!cancelled) setTimelineById((prev) => ({ ...prev, [expandedTimelineId]: d }))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [token, expandedTimelineId, selectedId, incidentDetail])
 
   useEffect(() => {
     if (!token || !selectedId) {
@@ -530,6 +698,22 @@ function App() {
     }
   }
 
+  const saveOperatorIncidentNotes = async (incidentId: string, notes: string) => {
+    if (!token) return
+    setSavingNotesForId(incidentId)
+    setError(null)
+    try {
+      const detail = await patchJson<IncidentDetail>(`/incidents/${incidentId}`, token, { notes })
+      setIncidents((prev) => prev.map((row) => (row.id === incidentId ? { ...row, notes: detail.notes } : row)))
+      if (selectedId === incidentId) setIncidentDetail(detail)
+      setTimelineById((prev) => ({ ...prev, [incidentId]: detail }))
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to save notes')
+    } finally {
+      setSavingNotesForId(null)
+    }
+  }
+
   if (!token || !user) {
     return (
       <div className="page">
@@ -609,21 +793,23 @@ function App() {
       <div className="layout">
         <aside className="list">
           <h3>Live incidents</h3>
-          {sortedIncidents.map((i) => (
+          {sortedIncidents.map((i) => {
+            void etaTick
+            return (
             <div
               key={i.id}
               role="button"
               tabIndex={0}
-              className={`inc-card ${selectedId === i.id ? 'active' : ''}`}
+              className={`inc-card ${selectedId === i.id ? 'active' : ''} ${dispatchUrgencyClass(i.created_at, i.status)}`}
               onClick={() => {
                 setSelectedId(i.id)
-                setIsDetailOpen(true)
+                setExpandedTimelineId((e) => (e === i.id ? null : i.id))
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
                   setSelectedId(i.id)
-                  setIsDetailOpen(true)
+                  setExpandedTimelineId((ex) => (ex === i.id ? null : i.id))
                 }
               }}
               style={{ borderLeftColor: severityColor[i.severity] ?? '#64748b' }}
@@ -631,6 +817,7 @@ function App() {
               <div className="row">
                 <strong>{i.incident_type}</strong>
                 <div className="chip-row">
+                  {i.severity === 'critical' && <span className="priority-badge">PRIORITY</span>}
                   {isNewIncident(i.created_at) && <span className="new-pill">NEW</span>}
                   <span className="pill" style={{ background: severityColor[i.severity] }}>
                     {i.severity}
@@ -655,11 +842,80 @@ function App() {
                 <span style={{ width: `${i.trust_score}%` }} />
               </div>
               <div className="meta">{statusLabel(i.status)}</div>
+              {(() => {
+                const etaLine = incidentCardEta(i, assignedVehicleByIncidentId[i.id], corridorVehicles)
+                return etaLine ? <div className="meta inc-eta">{etaLine}</div> : null
+              })()}
               {assignedVehicleByIncidentId[i.id] && (
                 <div className="meta">
                   Assigned: {vehicleLabelById[assignedVehicleByIncidentId[i.id].vehicle_id] ?? assignedVehicleByIncidentId[i.id].label}
                 </div>
               )}
+              <div className="inc-card-notes" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                <label className="inc-notes-label">Operator notes</label>
+                <textarea
+                  className="inc-notes-input"
+                  rows={2}
+                  placeholder="e.g. Caller says truck is blocking both lanes"
+                  value={operatorNoteDraft[i.id] ?? i.notes ?? ''}
+                  onChange={(e) => setOperatorNoteDraft((prev) => ({ ...prev, [i.id]: e.target.value }))}
+                />
+                <div className="inc-notes-actions">
+                  <button
+                    type="button"
+                    className="inc-notes-save"
+                    disabled={savingNotesForId === i.id}
+                    onClick={() => void saveOperatorIncidentNotes(i.id, operatorNoteDraft[i.id] ?? i.notes ?? '')}
+                  >
+                    {savingNotesForId === i.id ? 'Saving…' : 'Save notes'}
+                  </button>
+                </div>
+              </div>
+              <div className="row inc-card-footer-links">
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setSelectedId(i.id)
+                    setIsDetailOpen(true)
+                  }}
+                >
+                  Full details
+                </button>
+              </div>
+              {expandedTimelineId === i.id ? (
+                timelineById[i.id] ? (
+                  <div className="incident-card-timeline" onClick={(e) => e.stopPropagation()}>
+                    <div className="incident-card-timeline-title">Incident timeline</div>
+                    <ol className="incident-card-timeline-steps">
+                      {buildIncidentTimelineSteps(timelineById[i.id]).map((step) => (
+                        <li key={step.key} className="incident-card-timeline-step">
+                          <span
+                            className={`timeline-dot ${step.done ? 'timeline-dot--done' : 'timeline-dot--pending'}`}
+                            aria-hidden
+                          />
+                          <span className="timeline-step-text">
+                            {step.label}
+                            {step.at ? (
+                              <>
+                                {' '}
+                                at {formatShortTime(step.at)}
+                              </>
+                            ) : (
+                              <span className="timeline-step-pending"> — pending</span>
+                            )}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : (
+                  <div className="incident-card-timeline incident-card-timeline--loading" onClick={(e) => e.stopPropagation()}>
+                    Loading timeline…
+                  </div>
+                )
+              ) : null}
               {isIncidentExpiredByAge(i.created_at) || i.status === 'expired' ? (
                 <span className="expired-badge" title="Older than 2 hours since created — no actions available">
                   Expired
@@ -735,7 +991,8 @@ function App() {
                 </button>
               )}
             </div>
-          ))}
+            )
+          })}
         </aside>
 
         <section className="map-panel">
@@ -927,6 +1184,45 @@ function App() {
               )}
             </>
           )}
+        </aside>
+
+        <aside className="shift-notes-panel">
+          <h3>Shift notes</h3>
+          <p className="hint shift-notes-hint">Saved on this device. Use at end of shift.</p>
+          <textarea
+            className="shift-notes-textarea"
+            rows={12}
+            value={shiftNotes}
+            onChange={(e) => {
+              const v = e.target.value
+              setShiftNotes(v)
+              localStorage.setItem(SHIFT_NOTES_KEY, v)
+              const ts = new Date().toISOString()
+              localStorage.setItem('reach_shift_notes_edit_v1', ts)
+              setShiftNotesEditedAt(ts)
+            }}
+            placeholder="Equipment checks, corridor issues, handover items…"
+          />
+          <div className="shift-notes-meta">
+            <span className="shift-notes-ts">
+              Last edited: {shiftNotesEditedAt ? new Date(shiftNotesEditedAt).toLocaleString() : '—'}
+            </span>
+          </div>
+          <div className="shift-notes-actions">
+            <button
+              type="button"
+              className="dispatch-btn handover-btn"
+              onClick={() => {
+                const name = user.full_name?.trim() || user.phone || 'Operator'
+                const at = new Date().toISOString()
+                localStorage.setItem(SHIFT_HANDOVER_KEY, JSON.stringify({ at, by: name }))
+                setShiftHandoverLine(`Handed over by ${name} at ${new Date().toLocaleString()}`)
+              }}
+            >
+              Hand over
+            </button>
+          </div>
+          {shiftHandoverLine ? <p className="shift-handover-line">{shiftHandoverLine}</p> : null}
         </aside>
       </div>
       {selected && isDetailOpen && (

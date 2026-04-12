@@ -68,10 +68,17 @@ class IncidentListItem(BaseModel):
     status: str
     reporter_type: str
     injured_count: int
+    notes: str | None = None
     public_report_id: str | None = None
     created_at: datetime
     updated_at: datetime
     eligible_for_reassign: bool = False
+
+
+class IncidentPatchBody(BaseModel):
+    """Partial update for dispatch console (e.g. operator notes)."""
+
+    notes: str | None = None
 
 
 class TimelineEventOut(BaseModel):

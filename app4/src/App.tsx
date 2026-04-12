@@ -2,7 +2,20 @@ import type { FormEvent } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { AnalyticsPage, BroadcastPage, SpeedZonesPage } from './adminAnalytics'
-import { API, apiUrl, deleteJson, downloadBlob, fetchJson, healthPing, login, postJson, type User } from './api'
+import {
+  API,
+  AUTH_TOKEN_KEY,
+  apiUrl,
+  deleteJson,
+  downloadBlob,
+  fetchJson,
+  healthPing,
+  isSessionExpiredError,
+  login,
+  postJson,
+  setAuthFailureHandler,
+  type User,
+} from './api'
 
 type Tab = 'dashboard' | 'map' | 'users' | 'corridors' | 'analytics' | 'broadcast' | 'speed_zones'
 
@@ -829,7 +842,11 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
 
 export default function App() {
   const leafletReady = useLeafletReady()
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('reach_token'))
+  const [token, setToken] = useState<string | null>(() => {
+    const raw = localStorage.getItem(AUTH_TOKEN_KEY)
+    const t = raw?.trim()
+    return t ? t : null
+  })
   const [user, setUser] = useState<User | null>(() => {
     const raw = localStorage.getItem('reach_user')
     if (!raw) return null
@@ -876,6 +893,27 @@ export default function App() {
   const [corridorDraft, setCorridorDraft] = useState<CorridorDraft | null>(null)
   const [newCorridorOrgId, setNewCorridorOrgId] = useState('')
 
+  const reportApiErr = useCallback((e: unknown, fallback?: string) => {
+    if (isSessionExpiredError(e)) return
+    setPageErr(e instanceof Error ? e.message : fallback ?? String(e))
+  }, [])
+
+  useEffect(() => {
+    setAuthFailureHandler(() => {
+      localStorage.removeItem(AUTH_TOKEN_KEY)
+      localStorage.removeItem('reach_user')
+      setToken(null)
+      setUser(null)
+      setPageErr(null)
+      setDash(null)
+      setRecent([])
+      setLiveMap([])
+      setUsers([])
+      setCorridors([])
+    })
+    return () => setAuthFailureHandler(null)
+  }, [])
+
   useEffect(() => {
     setPageErr(null)
   }, [tab])
@@ -916,41 +954,46 @@ export default function App() {
 
   useEffect(() => {
     if (!token) return
-    void loadDashboard().catch((e: unknown) => setPageErr(e instanceof Error ? e.message : String(e)))
-  }, [token, loadDashboard])
+    void loadDashboard().catch((e: unknown) => reportApiErr(e))
+  }, [token, loadDashboard, reportApiErr])
 
   useEffect(() => {
     if (!token || tab !== 'map') return
-    void loadMap().catch((e: unknown) => setPageErr(e instanceof Error ? e.message : String(e)))
+    void loadMap().catch((e: unknown) => reportApiErr(e))
     const id = window.setInterval(() => {
-      void loadMap().catch(() => {})
+      void loadMap().catch((e: unknown) => {
+        if (!isSessionExpiredError(e)) {
+          /* interval: ignore transient errors; 401 handled in api */
+        }
+      })
     }, 15000)
     return () => window.clearInterval(id)
-  }, [token, tab, loadMap])
+  }, [token, tab, loadMap, reportApiErr])
 
   useEffect(() => {
     if (!token || tab !== 'users') return
-    void loadUsers().catch((e: unknown) => setPageErr(e instanceof Error ? e.message : String(e)))
-  }, [token, tab, loadUsers])
+    void loadUsers().catch((e: unknown) => reportApiErr(e))
+  }, [token, tab, loadUsers, reportApiErr])
 
   useEffect(() => {
     if (!token || tab !== 'corridors') return
-    void loadCorridors().catch((e: unknown) => setPageErr(e instanceof Error ? e.message : String(e)))
-  }, [token, tab, loadCorridors])
+    void loadCorridors().catch((e: unknown) => reportApiErr(e))
+  }, [token, tab, loadCorridors, reportApiErr])
 
   useEffect(() => {
     if (!token || tab !== 'speed_zones') return
-    void loadCorridors().catch((e: unknown) => setPageErr(e instanceof Error ? e.message : String(e)))
-  }, [token, tab, loadCorridors])
+    void loadCorridors().catch((e: unknown) => reportApiErr(e))
+  }, [token, tab, loadCorridors, reportApiErr])
 
   const doLogin = async (e: FormEvent) => {
     e.preventDefault()
     setLoginErr(null)
     try {
       const res = await login(loginPhone, loginPw)
-      localStorage.setItem('reach_token', res.access_token)
+      const at = res.access_token.trim()
+      localStorage.setItem(AUTH_TOKEN_KEY, at)
       localStorage.setItem('reach_user', JSON.stringify(res.user))
-      setToken(res.access_token)
+      setToken(at)
       setUser(res.user)
     } catch (err: unknown) {
       setLoginErr(err instanceof Error ? err.message : 'Login failed')
@@ -965,14 +1008,14 @@ export default function App() {
       const detail = await fetchJson<IncidentDetail>(`/admin/incidents/${incidentId}`, token)
       setSelectedIncident(detail)
     } catch (err: unknown) {
-      setPageErr(err instanceof Error ? err.message : 'Failed to fetch incident detail')
+      reportApiErr(err, 'Failed to fetch incident detail')
     } finally {
       setIncidentLoading(false)
     }
   }
 
   const logout = () => {
-    localStorage.removeItem('reach_token')
+    localStorage.removeItem(AUTH_TOKEN_KEY)
     localStorage.removeItem('reach_user')
     setToken(null)
     setUser(null)
@@ -994,7 +1037,7 @@ export default function App() {
       setNewUserName('')
       await loadUsers()
     } catch (err: unknown) {
-      setPageErr(err instanceof Error ? err.message : 'Failed to add user')
+      reportApiErr(err, 'Failed to add user')
     }
   }
 
@@ -1005,7 +1048,7 @@ export default function App() {
       await deleteJson(`/admin/users/${id}`, token)
       await loadUsers()
     } catch (err: unknown) {
-      setPageErr(err instanceof Error ? err.message : 'Failed to delete')
+      reportApiErr(err, 'Failed to delete')
     }
   }
 
@@ -1017,7 +1060,7 @@ export default function App() {
       await loadCorridors()
       if (tab === 'map') await loadMap()
     } catch (err: unknown) {
-      setPageErr(err instanceof Error ? err.message : 'Failed to delete corridor')
+      reportApiErr(err, 'Failed to delete corridor')
     }
   }
 
@@ -1153,7 +1196,7 @@ export default function App() {
       resetCorridorForm()
       await loadCorridors()
     } catch (err: unknown) {
-      setPageErr(err instanceof Error ? err.message : 'Failed to add corridor')
+      reportApiErr(err, 'Failed to add corridor')
     }
   }
 
@@ -1246,7 +1289,7 @@ export default function App() {
                 onClick={() => {
                   if (!token) return
                   void downloadBlob('/admin/incidents/export?limit=100', token, 'reach_incidents_export.csv').catch(
-                    (e: unknown) => setPageErr(e instanceof Error ? e.message : 'Export failed'),
+                    (e: unknown) => reportApiErr(e, 'Export failed'),
                   )
                 }}
               >
