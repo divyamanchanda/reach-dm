@@ -357,7 +357,9 @@ export default function App() {
     setCorridorId(corridors[0].id)
   }, [phase, corridorId, corridors])
 
+  /** GPS fix — independent of internet connectivity (`isConnected`). */
   const gpsOk = locState === 'ok' && geo != null
+  const gpsFailed = locState === 'fail'
   const soleCorridor = corridors.length === 1 ? corridors[0] : null
   const soleHighwayResolved =
     Boolean(soleCorridor && corridorId === soleCorridor.id && !corridorsLoading)
@@ -367,14 +369,14 @@ export default function App() {
     !corridorFromUrl &&
     !DEFAULT_CORRIDOR &&
     corridors.length > 1
-  const showManualLocation = phase === 'form' && locState === 'fail'
+  /** Milestone + direction/hazards/photo/vehicles: only when geolocation failed — not when offline. */
+  const showGpsFallbackFields = phase === 'form' && gpsFailed
   const showMultiHighwayPicker =
-    !corridorsLoading && corridors.length > 1 && (showManualLocation || needsHighwayWhenGps)
+    !corridorsLoading && corridors.length > 1 && (showGpsFallbackFields || needsHighwayWhenGps)
 
   const kmNum = kmMarker.trim() === '' ? null : Number(kmMarker.trim())
   const kmValid = kmNum != null && Number.isFinite(kmNum)
-  const showManualExtras =
-    phase === 'form' && showManualLocation && (kmValid || skippedMilestone)
+  const showManualExtras = showGpsFallbackFields && (kmValid || skippedMilestone)
 
   const toggleHazard = (id: string) => {
     if (id === 'none_visible') {
@@ -403,7 +405,7 @@ export default function App() {
       return
     }
 
-    if (showManualLocation || needsHighwayWhenGps) {
+    if (showGpsFallbackFields || needsHighwayWhenGps) {
       if (!corridorId && corridors.length > 1) {
         setError('Choose your highway from the list.')
         return
@@ -594,16 +596,35 @@ export default function App() {
   }
 
   return (
-    <div className={`sos-app ${deliveredBanner ? 'sos-app--delivered' : ''}`}>
+    <div
+      className={`sos-app ${deliveredBanner ? 'sos-app--delivered' : ''} ${phase === 'form' ? 'sos-app--form-gps' : ''}`}
+    >
       <div
         className={`sos-net-banner ${isConnected ? 'sos-net-banner--ok' : 'sos-net-banner--bad'}`}
         role="status"
         aria-live="polite"
       >
         {isConnected
-          ? '🟢 Connected — SOS will send instantly'
-          : '🔴 Offline — app works; reports save and send when you get signal'}
+          ? '🟢 Internet connected — SOS will send instantly'
+          : '🔴 No internet — SMS fallback active'}
       </div>
+      {phase === 'form' ? (
+        <div
+          className={`sos-gps-strip ${
+            locState === 'ok' ? 'sos-gps-strip--ok' : locState === 'fail' ? 'sos-gps-strip--warn' : 'sos-gps-strip--pending'
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          {locState === 'pending' ? (
+            <span>📍 GPS: Acquiring…</span>
+          ) : locState === 'ok' ? (
+            <span>📍 GPS: Captured ✓</span>
+          ) : (
+            <span>📍 GPS: Not available — please use milestone below</span>
+          )}
+        </div>
+      ) : null}
       {deliveredBanner ? (
         <div className="sos-delivered-banner" role="status">
           {deliveredBanner}
@@ -731,17 +752,11 @@ export default function App() {
             {locState === 'pending' && (
               <p className="loc-pending" role="status">
                 <span className="loc-dot" aria-hidden="true" />
-                Finding your location…
+                Requesting GPS from your device…
               </p>
             )}
             {locState === 'ok' && (
               <>
-                <p className="loc-ok" role="status">
-                  <span className="loc-check" aria-hidden="true">
-                    ✓
-                  </span>
-                  Location captured
-                </p>
                 {soleHighwayResolved && soleCorridor ? (
                   <HighwayDetectedLine name={soleCorridor.name} />
                 ) : null}
@@ -750,7 +765,7 @@ export default function App() {
             {locState === 'fail' && (
               <div className="loc-fallback">
                 <p className="loc-bad" role="status">
-                  Location not found
+                  GPS unavailable — enter details below
                 </p>
                 {corridorsLoading && <p className="sos-warn">Loading highways…</p>}
                 {corridorsError && !corridorsLoading && <p className="sos-warn">{corridorsError}</p>}
@@ -967,7 +982,11 @@ export default function App() {
                 id="sos-pending-reports-badge"
                 className="sos-submit-pending-badge"
                 role="status"
-                title={`${pendingCount} report(s) queued — will send when online`}
+                title={
+                  isConnected
+                    ? `${pendingCount} report(s) queued — will send when online`
+                    : `${pendingCount} report(s) saved — will send via API when internet returns (SMS fallback active)`
+                }
               >
                 <span className="sos-submit-pending-reports">Pending reports</span>
                 <span className="sos-submit-pending-num">{pendingCount}</span>
@@ -995,7 +1014,7 @@ export default function App() {
       {phase === 'offline_saved' && (
         <div className="sos-offline-saved">
           <p className="sos-offline-saved-lead" role="status">
-            📦 Report saved on your device. It will send automatically when you get signal.
+            📦 No internet — SMS fallback active. Report saved on your device; it will send via API when you are back online.
           </p>
           <p className="sos-offline-saved-pending">
             {pendingCount} report{pendingCount === 1 ? '' : 's'} pending
