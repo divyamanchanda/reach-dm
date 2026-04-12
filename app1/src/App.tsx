@@ -130,20 +130,20 @@ function severityRank(sev: string): number {
   return SEVERITY_ORDER[sev.toLowerCase()] ?? 9
 }
 
-/** True until dispatch or terminal outcome — “responded” in dispatch-console terms. */
-function isUnrespondedIncident(inc: Incident): boolean {
-  return !['dispatched', 'closed', 'cancelled', 'recalled', 'expired'].includes(inc.status)
+/** Expired / closed — keep at end of the list. */
+function isExpiredOrClosedStatus(status: string): boolean {
+  return status === 'expired' || status === 'closed'
 }
 
-/** Critical → Major → Minor; within severity, unresponded before responded; then oldest first. */
+/** Active first; then expired/closed. Within each bucket: severity, then newest first. */
 function sortIncidentsByPriority(items: Incident[]): Incident[] {
   return [...items].sort((a, b) => {
+    const ab = isExpiredOrClosedStatus(a.status) ? 1 : 0
+    const bb = isExpiredOrClosedStatus(b.status) ? 1 : 0
+    if (ab !== bb) return ab - bb
     const rs = severityRank(a.severity) - severityRank(b.severity)
     if (rs !== 0) return rs
-    const ua = isUnrespondedIncident(a) ? 0 : 1
-    const ub = isUnrespondedIncident(b) ? 0 : 1
-    if (ua !== ub) return ua - ub
-    return +new Date(a.created_at) - +new Date(b.created_at)
+    return +new Date(b.created_at) - +new Date(a.created_at)
   })
 }
 
@@ -258,6 +258,27 @@ function trustBand(score: number): { label: string; className: 'trust-low' | 'tr
   if (score <= 30) return { label: 'Unverified', className: 'trust-low' }
   if (score <= 60) return { label: 'Partially verified', className: 'trust-mid' }
   return { label: 'High confidence', className: 'trust-high' }
+}
+
+/** Single display derived from `trust_score` — use everywhere verification status is shown. */
+function trustVerificationFromScore(score: number): {
+  emoji: string
+  label: string
+  className: 'trust-low' | 'trust-mid' | 'trust-high'
+} {
+  const band = trustBand(score)
+  const emoji =
+    band.className === 'trust-low' ? '🔴' : band.className === 'trust-mid' ? '🟡' : '🟢'
+  return { emoji, label: band.label, className: band.className }
+}
+
+function TrustVerificationLabel({ score }: { score: number }) {
+  const v = trustVerificationFromScore(score)
+  return (
+    <span className={`trust-label ${v.className}`}>
+      {v.emoji} {v.label}
+    </span>
+  )
 }
 
 const DISPATCH_NO_AMBULANCE = '__reach_no_ambulance__'
@@ -544,10 +565,16 @@ function App() {
       setNearby([])
       return
     }
+    const status =
+      incidentDetail?.id === selectedId ? incidentDetail.status : incidents.find((i) => i.id === selectedId)?.status
+    if (status && isExpiredOrClosedStatus(status)) {
+      setNearby([])
+      return
+    }
     fetchJson<NearbyVehicle[]>(`/incidents/${selectedId}/nearby-vehicles`, token)
       .then(setNearby)
       .catch(() => setNearby([]))
-  }, [token, selectedId])
+  }, [token, selectedId, incidents, incidentDetail?.id, incidentDetail?.status])
 
   const doLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -832,21 +859,10 @@ function App() {
                 </div>
               </div>
               <div className="meta">
-                KM {i.km_marker ?? '—'} ·{' '}
-                <span className={`trust-label ${trustBand(i.trust_score).className}`}>
-                  {trustBand(i.trust_score).className === 'trust-low'
-                    ? '🔴'
-                    : trustBand(i.trust_score).className === 'trust-mid'
-                      ? '🟡'
-                      : '🟢'}{' '}
-                  {trustBand(i.trust_score).label}
-                </span>
+                KM {i.km_marker ?? '—'} · <TrustVerificationLabel score={i.trust_score} />
               </div>
               <div className="meta">
                 Report {(i.public_report_id ?? i.id).slice(0, 8)} · {relativeReportedTime(i.created_at)}
-              </div>
-              <div className="trust-bar">
-                <span style={{ width: `${i.trust_score}%` }} />
               </div>
               <div className="meta">{statusLabel(i.status)}</div>
               {(() => {
@@ -1066,7 +1082,22 @@ function App() {
           {!selected && <p>Select an incident.</p>}
           {selected && (
             <>
-              <h3>Incident detail</h3>
+              <div className="detail-panel-header">
+                <h3>Incident detail</h3>
+                <button
+                  type="button"
+                  className="detail-panel-close"
+                  aria-label="Close and clear selection"
+                  title="Close"
+                  onClick={() => {
+                    setSelectedId(null)
+                    setExpandedTimelineId(null)
+                    setIsDetailOpen(false)
+                  }}
+                >
+                  ×
+                </button>
+              </div>
               <dl className="kv">
                 <dt>Type</dt>
                 <dd>{selected.incident_type}</dd>
@@ -1076,7 +1107,11 @@ function App() {
                 <dd>{selected.km_marker ?? '—'}</dd>
                 <dt>Trust</dt>
                 <dd>
-                  {selected.trust_score} — {selected.trust_recommendation ?? '—'}
+                  <TrustVerificationLabel
+                    score={
+                      incidentDetail?.id === selected.id ? incidentDetail.trust_score : selected.trust_score
+                    }
+                  />
                 </dd>
                 <dt>Reporter</dt>
                 <dd>{selected.reporter_type}</dd>
@@ -1112,18 +1147,27 @@ function App() {
                 </div>
               )}
 
-              <h4>Nearest ambulances</h4>
-              <ul className="vehicle-list">
-                {nearby.map((v) => (
-                  <li key={v.vehicle_id}>
-                    {v.label} — {Math.round(v.distance_meters)} m
-                    {v.eta_minutes != null ? ` · ~${v.eta_minutes} min` : ''}
-                    <span className={`eta-badge ${v.eta_source === 'route' ? 'route' : 'fallback'}`}>
-                      {v.eta_source === 'route' ? 'ETA: route' : 'ETA: fallback'}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              {(() => {
+                const statusForUi =
+                  incidentDetail?.id === selected.id ? incidentDetail.status : selected.status
+                if (isExpiredOrClosedStatus(statusForUi)) return null
+                return (
+                  <>
+                    <h4>Nearest ambulances</h4>
+                    <ul className="vehicle-list">
+                      {nearby.map((v) => (
+                        <li key={v.vehicle_id}>
+                          {v.label} — {Math.round(v.distance_meters)} m
+                          {v.eta_minutes != null ? ` · ~${v.eta_minutes} min` : ''}
+                          <span className={`eta-badge ${v.eta_source === 'route' ? 'route' : 'fallback'}`}>
+                            {v.eta_source === 'route' ? 'ETA: route' : 'ETA: fallback'}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )
+              })()}
               {isIncidentExpiredByAge(selected.created_at) || selected.status === 'expired' ? (
                 <span className="expired-badge" title="Older than 2 hours since created — no actions available">
                   Expired
@@ -1268,10 +1312,14 @@ function App() {
               <dd>{incidentDetail?.km_marker ?? selected.km_marker ?? '—'}</dd>
               <dt>Injured count</dt>
               <dd>{incidentDetail?.injured_count ?? selected.injured_count}</dd>
-              <dt>Trust score</dt>
-              <dd>{selected.trust_score}</dd>
-              <dt>Trust recommendation</dt>
-              <dd>{selected.trust_recommendation ?? '—'}</dd>
+              <dt>Trust</dt>
+              <dd>
+                <TrustVerificationLabel
+                  score={
+                    incidentDetail?.id === selected.id ? incidentDetail.trust_score : selected.trust_score
+                  }
+                />
+              </dd>
               <dt>Latitude</dt>
               <dd>{incidentDetail?.latitude ?? selected.latitude ?? '—'}</dd>
               <dt>Longitude</dt>
