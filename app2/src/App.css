@@ -8,10 +8,69 @@
   max-width: 28rem;
   margin: 0 auto;
   padding: 1rem 1rem 1.5rem;
+  padding-top: calc(2.75rem + env(safe-area-inset-top, 0px));
   background: linear-gradient(180deg, #3f0d0d 0%, #1a0505 100%);
   color: #fff8f8;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   -webkit-tap-highlight-color: transparent;
+}
+
+.sos-net-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 400;
+  padding: 0.55rem 0.85rem;
+  padding-top: max(0.55rem, env(safe-area-inset-top, 0px));
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.35;
+}
+
+.sos-net-banner--ok {
+  background: #14532d;
+  color: #dcfce7;
+  border-bottom: 1px solid #166534;
+}
+
+.sos-net-banner--bad {
+  background: #7f1d1d;
+  color: #fecaca;
+  border-bottom: 1px solid #991b1b;
+}
+
+.sos-delivered-banner {
+  position: fixed;
+  top: 3rem;
+  top: calc(env(safe-area-inset-top, 0px) + 3rem);
+  left: 0;
+  right: 0;
+  z-index: 399;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-align: center;
+  background: #14532d;
+  color: #bbf7d0;
+  border-bottom: 1px solid #166534;
+  animation: sos-toast-in 0.35s ease-out;
+}
+
+@keyframes sos-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sos-app--delivered {
+  padding-top: calc(4.85rem + env(safe-area-inset-top, 0px));
 }
 
 /* —— Landing —— */
@@ -411,6 +470,12 @@
 }
 
 .sos-submit {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem 0.65rem;
   width: 100%;
   min-height: 3.35rem;
   margin-top: 0.25rem;
@@ -424,6 +489,25 @@
   cursor: pointer;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
   touch-action: manipulation;
+}
+
+.sos-submit-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+}
+
+.sos-submit-pending-badge {
+  flex: 0 0 auto;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  color: #fef08a;
 }
 
 .sos-submit:disabled {
@@ -485,4 +569,52 @@
   line-height: 1.35;
   color: #9ca3af;
   max-width: 22rem;
+}
+
+.sos-injured-label {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+}
+
+.sos-injured-input {
+  width: 100%;
+  max-width: 8rem;
+  min-height: 3rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  border: 2px solid rgba(254, 202, 202, 0.45);
+  background: rgba(0, 0, 0, 0.2);
+  color: #fff;
+  font-size: 1.25rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* —— Offline saved —— */
+.sos-offline-saved {
+  min-height: calc(100svh - 4rem);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 1rem;
+  padding: 1rem 0.25rem 2rem;
+  text-align: center;
+}
+
+.sos-offline-saved-lead {
+  margin: 0;
+  font-size: 1.1rem;
+  line-height: 1.45;
+  font-weight: 700;
+  color: #fde8e8;
+}
+
+.sos-offline-saved-pending {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #fde047;
 }

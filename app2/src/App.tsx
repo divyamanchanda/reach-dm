@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { apiUrl } from './api'
+import {
+  enqueuePending,
+  loadPending,
+  QUEUE_MAX_AGE_MS,
+  savePending,
+  type PendingSosPayload,
+} from './sosOfflineQueue'
+import { useNetworkConnectivity } from './useNetworkConnectivity'
 
 const DEFAULT_CORRIDOR = String(import.meta.env.VITE_CORRIDOR_ID ?? '').trim()
 
@@ -80,7 +88,7 @@ const SEVERITIES = [
   { value: 'minor', label: 'Minor', tone: 'minor' as const },
 ]
 
-type Phase = 'landing' | 'form' | 'done'
+type Phase = 'landing' | 'form' | 'done' | 'offline_saved'
 type LocState = 'pending' | 'ok' | 'fail'
 
 /** Full-width tap targets — large label text; selected = red highlight + check (not checkbox UI). */
@@ -154,6 +162,7 @@ export default function App() {
   const [severity, setSeverity] = useState<string>('major')
   const [notes, setNotes] = useState('')
   const [kmMarker, setKmMarker] = useState('')
+  const [injuredCount, setInjuredCount] = useState(0)
 
   const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null)
   const [locState, setLocState] = useState<LocState>('pending')
@@ -161,6 +170,84 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<PublicResponse | null>(null)
+  const [deliveredBanner, setDeliveredBanner] = useState<string | null>(null)
+  const [queueVersion, setQueueVersion] = useState(0)
+
+  const { isConnected } = useNetworkConnectivity()
+
+  const pendingCount = useMemo(() => {
+    const now = Date.now()
+    return loadPending().filter((p) => now - p.queuedAt <= QUEUE_MAX_AGE_MS).length
+  }, [queueVersion, isConnected])
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === null || e.key.includes('reach_sos')) setQueueVersion((v) => v + 1)
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  useEffect(() => {
+    if (!isConnected) return
+    let cancelled = false
+
+    const flushQueue = async () => {
+      const now = Date.now()
+      let items = loadPending().filter((p) => now - p.queuedAt <= QUEUE_MAX_AGE_MS)
+      savePending(items)
+      if (items.length === 0) return
+
+      const remaining: typeof items = []
+      let lastOk: PublicResponse | null = null
+      let sent = 0
+
+      for (const item of items) {
+        if (cancelled) return
+        try {
+          const r = await fetch(apiUrl(`/corridors/${item.corridorId}/incidents/public`), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(item.body),
+          })
+          if (r.ok) {
+            lastOk = (await r.json()) as PublicResponse
+            sent += 1
+          } else {
+            remaining.push(item)
+          }
+        } catch {
+          remaining.push(item)
+        }
+      }
+
+      savePending(remaining)
+      setQueueVersion((v) => v + 1)
+
+      if (sent === 0) return
+
+      setDeliveredBanner(
+        sent === 1 ? '✅ Your report was sent successfully' : '✅ Your reports were sent successfully',
+      )
+      window.setTimeout(() => setDeliveredBanner(null), 12_000)
+
+      if (remaining.length > 0) return
+
+      if (sent === 1 && lastOk) {
+        setResult(lastOk)
+        setPhase('done')
+      } else if (sent > 1) {
+        setPhase('landing')
+      }
+    }
+
+    void flushQueue()
+    const id = window.setInterval(() => void flushQueue(), 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [isConnected])
 
   const startGps = useCallback(() => {
     setGeo(null)
@@ -184,6 +271,7 @@ export default function App() {
     setResult(null)
     setNotes('')
     setKmMarker('')
+    setInjuredCount(0)
     setIncidentType(INCIDENT_TYPES[0].value)
     setSeverity('major')
     setCorridorId(corridorFromUrl || DEFAULT_CORRIDOR)
@@ -267,24 +355,38 @@ export default function App() {
       }
     }
 
+    const injured = Math.max(0, Math.min(99, Math.floor(Number(injuredCount)) || 0))
+
+    const payloadBody: PendingSosPayload = {
+      incident_type: incidentType,
+      severity,
+      injured_count: injured,
+      notes: notes.trim() || undefined,
+      latitude: gpsOk ? geo!.lat : undefined,
+      longitude: gpsOk ? geo!.lng : undefined,
+    }
+    if (showManualLocation && kmValid) {
+      payloadBody.km_marker = kmNum!
+    }
+
+    if (!isConnected) {
+      setBusy(true)
+      try {
+        enqueuePending(effectiveCorridor, payloadBody)
+        setQueueVersion((v) => v + 1)
+        setPhase('offline_saved')
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
     setBusy(true)
     try {
-      const payload: Record<string, unknown> = {
-        incident_type: incidentType,
-        severity,
-        injured_count: 0,
-        notes: notes.trim() || undefined,
-        latitude: gpsOk ? geo!.lat : undefined,
-        longitude: gpsOk ? geo!.lng : undefined,
-      }
-      if (showManualLocation && kmValid) {
-        payload.km_marker = kmNum
-      }
-
       const r = await fetch(apiUrl(`/corridors/${effectiveCorridor}/incidents/public`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(payloadBody),
       })
 
       if (!r.ok) {
@@ -315,7 +417,21 @@ export default function App() {
   }
 
   return (
-    <div className="sos-app">
+    <div className={`sos-app ${deliveredBanner ? 'sos-app--delivered' : ''}`}>
+      <div
+        className={`sos-net-banner ${isConnected ? 'sos-net-banner--ok' : 'sos-net-banner--bad'}`}
+        role="status"
+        aria-live="polite"
+      >
+        {isConnected
+          ? '🟢 Connected — SOS will send instantly'
+          : '🔴 Offline — app works; reports save and send when you get signal'}
+      </div>
+      {deliveredBanner ? (
+        <div className="sos-delivered-banner" role="status">
+          {deliveredBanner}
+        </div>
+      ) : null}
       {phase === 'landing' && (
         <div className="sos-landing">
           <button type="button" className="sos-mega" onClick={beginReport}>
@@ -357,6 +473,29 @@ export default function App() {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="sos-section">
+            <label className="sos-injured-label" htmlFor="sos-injured">
+              People injured <span className="optional">(estimate)</span>
+            </label>
+            <input
+              id="sos-injured"
+              type="number"
+              className="sos-injured-input"
+              min={0}
+              max={99}
+              value={injuredCount}
+              onChange={(e) => {
+                const n = Number(e.target.value)
+                if (Number.isNaN(n)) {
+                  setInjuredCount(0)
+                  return
+                }
+                setInjuredCount(Math.max(0, Math.min(99, Math.floor(n))))
+              }}
+              inputMode="numeric"
+            />
           </div>
 
           <div className="sos-section">
@@ -474,9 +613,30 @@ export default function App() {
             className="sos-submit"
             disabled={busy || locState === 'pending'}
           >
-            {busy ? 'Sending…' : locState === 'pending' ? 'Getting location…' : 'Submit emergency report'}
+            <span className="sos-submit-label">
+              {busy ? 'Sending…' : locState === 'pending' ? 'Getting location…' : 'Submit emergency report'}
+            </span>
+            {pendingCount > 0 ? (
+              <span className="sos-submit-pending-badge" title={`${pendingCount} report(s) waiting to send`}>
+                {pendingCount} pending
+              </span>
+            ) : null}
           </button>
         </form>
+      )}
+
+      {phase === 'offline_saved' && (
+        <div className="sos-offline-saved">
+          <p className="sos-offline-saved-lead" role="status">
+            📦 Report saved on your device. It will send automatically when you get signal.
+          </p>
+          <p className="sos-offline-saved-pending">
+            {pendingCount} report{pendingCount === 1 ? '' : 's'} pending
+          </p>
+          <button type="button" className="sos-secondary" onClick={resetToLanding}>
+            Back to home
+          </button>
+        </div>
       )}
 
       {phase === 'done' && result && (
