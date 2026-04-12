@@ -8,7 +8,35 @@ const N_SEG = Math.ceil(NH48_KM / SEG_KM)
 const HW_PAD = 52
 const HW_W = 1000
 
+export type AnalyticsPeriod = 'today' | '7d' | '30d'
+
+type KpiTrend = { arrow: 'up' | 'down' | 'flat'; favorable: boolean }
+
 export type AdminAnalytics = {
+  period: AnalyticsPeriod
+  comparison_label: string
+  kpis: {
+    total_incidents: number
+    total_incidents_delta: number
+    total_incidents_trend: KpiTrend
+    avg_response_time_minutes: number | null
+    avg_response_time_prev_minutes: number | null
+    response_time_under_target: boolean
+    avg_response_time_trend: KpiTrend
+    resolution_rate_pct: number | null
+    resolution_rate_prev_pct: number | null
+    resolution_rate_trend: KpiTrend
+    hoax_rate_pct: number | null
+    hoax_rate_prev_pct: number | null
+    hoax_rate_trend: KpiTrend
+    ambulances_on_duty: number
+    ambulances_total: number
+    ambulances_trend: KpiTrend
+    sos_app: number
+    sos_sms: number
+    sos_auto: number
+    sos_source_trend: KpiTrend
+  }
   avg_response_time_minutes: number | null
   response_time_last_20: { incident_id: string; reported_at: string; response_minutes: number }[]
   heatmap_buckets: { segment_start_km: number; incident_count: number }[]
@@ -144,32 +172,199 @@ function VehicleUtilizationBars({
   )
 }
 
+function TrendArrow({ trend }: { trend: KpiTrend }) {
+  const sym = trend.arrow === 'up' ? '↑' : trend.arrow === 'down' ? '↓' : '→'
+  return (
+    <span
+      className={`analytics-kpi-trend-ico ${trend.favorable ? 'analytics-kpi-trend-ico--good' : 'analytics-kpi-trend-ico--bad'}`}
+      title={trend.favorable ? 'Favorable trend' : 'Unfavorable trend'}
+      aria-hidden
+    >
+      {sym}
+    </span>
+  )
+}
+
+function formatIncidentDelta(delta: number, comparisonLabel: string) {
+  const abs = Math.abs(delta)
+  if (delta === 0) return `No change vs ${comparisonLabel}`
+  if (delta > 0) return `▲ ${abs} more than ${comparisonLabel}`
+  return `▼ ${abs} fewer than ${comparisonLabel}`
+}
+
+const PERIOD_OPTIONS: { id: AnalyticsPeriod; label: string }[] = [
+  { id: 'today', label: 'Today' },
+  { id: '7d', label: 'Last 7 days' },
+  { id: '30d', label: 'Last 30 days' },
+]
+
 export function AnalyticsPage({ token, onError }: { token: string; onError: (msg: string | null) => void }) {
+  const [period, setPeriod] = useState<AnalyticsPeriod>('7d')
   const [data, setData] = useState<AdminAnalytics | null>(null)
   const load = useCallback(async () => {
     try {
-      setData(await fetchJson<AdminAnalytics>('/admin/analytics', token))
+      setData(await fetchJson<AdminAnalytics>(`/admin/analytics?period=${encodeURIComponent(period)}`, token))
       onError(null)
     } catch (e: unknown) {
       if (isSessionExpiredError(e)) return
       onError(e instanceof Error ? e.message : 'Failed to load analytics')
     }
-  }, [token, onError])
+  }, [token, onError, period])
   useEffect(() => {
     void load()
   }, [load])
 
+  const k = data?.kpis
+
   return (
-    <div className="analytics-page">
-      <h2>Analytics</h2>
-      <p className="muted intro">Operations metrics derived from incidents, dispatches, and live vehicles.</p>
-      {!data ? (
-        <p>Loading…</p>
+    <div className="analytics-page analytics-page--dark">
+      <header className="analytics-page-header">
+        <div className="analytics-page-header-text">
+          <h2>Analytics</h2>
+          <p className="muted intro">Operations metrics derived from incidents, dispatches, and live vehicles.</p>
+        </div>
+        <div className="analytics-period-toggle" role="tablist" aria-label="Time period">
+          {PERIOD_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              role="tab"
+              aria-selected={period === opt.id}
+              className={period === opt.id ? 'analytics-period-btn analytics-period-btn--active' : 'analytics-period-btn'}
+              onClick={() => setPeriod(opt.id)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </header>
+      {!data || !k ? (
+        <p className="analytics-loading">Loading…</p>
       ) : (
-        <div className="analytics-grid">
-          <section className="analytics-card">
+        <>
+          <div className="analytics-kpi-grid">
+            <article className="analytics-kpi-card">
+              <div className="analytics-kpi-card-top">
+                <span className="analytics-kpi-emoji" aria-hidden>
+                  🚨
+                </span>
+                <TrendArrow trend={k.total_incidents_trend} />
+              </div>
+              <div className="analytics-kpi-title">Total Incidents</div>
+              <div className="analytics-kpi-value">{k.total_incidents}</div>
+              <div
+                className={`analytics-kpi-delta ${
+                  k.total_incidents_delta === 0
+                    ? 'analytics-kpi-delta--neutral'
+                    : k.total_incidents_trend.favorable
+                      ? 'analytics-kpi-delta--good'
+                      : 'analytics-kpi-delta--bad'
+                }`}
+              >
+                {formatIncidentDelta(k.total_incidents_delta, data.comparison_label)}
+              </div>
+            </article>
+
+            <article className="analytics-kpi-card">
+              <div className="analytics-kpi-card-top">
+                <span className="analytics-kpi-emoji" aria-hidden>
+                  ⏱️
+                </span>
+                <TrendArrow trend={k.avg_response_time_trend} />
+              </div>
+              <div className="analytics-kpi-title">Avg Response Time</div>
+              <div className="analytics-kpi-value-row">
+                <span className="analytics-kpi-value">
+                  {k.avg_response_time_minutes != null ? k.avg_response_time_minutes.toFixed(1) : '—'}
+                  {k.avg_response_time_minutes != null ? <span className="analytics-kpi-unit">min</span> : null}
+                </span>
+                <span
+                  className={`analytics-kpi-target-badge ${
+                    k.avg_response_time_minutes == null
+                      ? 'analytics-kpi-target-badge--na'
+                      : k.response_time_under_target
+                        ? 'analytics-kpi-target-badge--ok'
+                        : 'analytics-kpi-target-badge--bad'
+                  }`}
+                >
+                  Target: &lt;8 min
+                </span>
+              </div>
+            </article>
+
+            <article className="analytics-kpi-card">
+              <div className="analytics-kpi-card-top">
+                <span className="analytics-kpi-emoji" aria-hidden>
+                  ✅
+                </span>
+                <TrendArrow trend={k.resolution_rate_trend} />
+              </div>
+              <div className="analytics-kpi-title">Resolution Rate</div>
+              <div className="analytics-kpi-value">
+                {k.resolution_rate_pct != null ? `${k.resolution_rate_pct.toFixed(1)}` : '—'}
+                {k.resolution_rate_pct != null ? <span className="analytics-kpi-unit">%</span> : null}
+              </div>
+              <p className="analytics-kpi-hint">Cleared (closed/archived), not expired</p>
+            </article>
+
+            <article className="analytics-kpi-card">
+              <div className="analytics-kpi-card-top">
+                <span className="analytics-kpi-emoji" aria-hidden>
+                  🎭
+                </span>
+                <TrendArrow trend={k.hoax_rate_trend} />
+              </div>
+              <div className="analytics-kpi-title">Hoax Rate</div>
+              <div className="analytics-kpi-value">
+                {k.hoax_rate_pct != null ? `${k.hoax_rate_pct.toFixed(1)}` : '—'}
+                {k.hoax_rate_pct != null ? <span className="analytics-kpi-unit">%</span> : null}
+              </div>
+              <p className="analytics-kpi-hint">Incidents marked recalled (hoax)</p>
+            </article>
+
+            <article className="analytics-kpi-card">
+              <div className="analytics-kpi-card-top">
+                <span className="analytics-kpi-emoji" aria-hidden>
+                  🚑
+                </span>
+                <TrendArrow trend={k.ambulances_trend} />
+              </div>
+              <div className="analytics-kpi-title">Ambulances Active</div>
+              <div className="analytics-kpi-value analytics-kpi-value--sm">
+                {k.ambulances_on_duty} <span className="analytics-kpi-of">of</span> {k.ambulances_total}
+              </div>
+              <p className="analytics-kpi-hint">On duty now</p>
+            </article>
+
+            <article className="analytics-kpi-card">
+              <div className="analytics-kpi-card-top">
+                <span className="analytics-kpi-emoji" aria-hidden>
+                  📱
+                </span>
+                <TrendArrow trend={k.sos_source_trend} />
+              </div>
+              <div className="analytics-kpi-title">SOS Source</div>
+              <ul className="analytics-kpi-sos-list">
+                <li>
+                  <span className="analytics-kpi-sos-label">App</span>
+                  <span className="analytics-kpi-sos-num">{k.sos_app}</span>
+                </li>
+                <li>
+                  <span className="analytics-kpi-sos-label">SMS</span>
+                  <span className="analytics-kpi-sos-num">{k.sos_sms}</span>
+                </li>
+                <li>
+                  <span className="analytics-kpi-sos-label">Auto</span>
+                  <span className="analytics-kpi-sos-num">{k.sos_auto}</span>
+                </li>
+              </ul>
+            </article>
+          </div>
+
+          <div className="analytics-grid">
+          <section className="analytics-card analytics-card--below-kpis">
             <h3>Response time</h3>
-            <p className="muted small">Average minutes from incident reported to first dispatch</p>
+            <p className="muted small">Average minutes from incident reported to first dispatch ({PERIOD_OPTIONS.find((o) => o.id === period)?.label})</p>
             <div className="analytics-big-num">
               {data.avg_response_time_minutes != null ? data.avg_response_time_minutes.toFixed(1) : '—'}
               <span className="unit">min</span>
@@ -228,6 +423,7 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
             </div>
           </section>
         </div>
+        </>
       )}
     </div>
   )

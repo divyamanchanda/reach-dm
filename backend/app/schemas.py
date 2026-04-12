@@ -372,7 +372,43 @@ class AnalyticsActiveDriverOut(BaseModel):
     on_active_call: bool
 
 
+class AnalyticsKpiTrendOut(BaseModel):
+    arrow: Literal["up", "down", "flat"]
+    favorable: bool
+
+
+class AdminAnalyticsKpisOut(BaseModel):
+    total_incidents: int
+    total_incidents_delta: int
+    total_incidents_trend: AnalyticsKpiTrendOut
+
+    avg_response_time_minutes: float | None
+    avg_response_time_prev_minutes: float | None
+    response_time_under_target: bool
+    avg_response_time_trend: AnalyticsKpiTrendOut
+
+    resolution_rate_pct: float | None
+    resolution_rate_prev_pct: float | None
+    resolution_rate_trend: AnalyticsKpiTrendOut
+
+    hoax_rate_pct: float | None
+    hoax_rate_prev_pct: float | None
+    hoax_rate_trend: AnalyticsKpiTrendOut
+
+    ambulances_on_duty: int
+    ambulances_total: int
+    ambulances_trend: AnalyticsKpiTrendOut
+
+    sos_app: int
+    sos_sms: int
+    sos_auto: int
+    sos_source_trend: AnalyticsKpiTrendOut
+
+
 class AdminAnalyticsOut(BaseModel):
+    period: str
+    comparison_label: str
+    kpis: AdminAnalyticsKpisOut
     avg_response_time_minutes: float | None
     response_time_last_20: list[AnalyticsResponsePointOut]
     heatmap_buckets: list[AnalyticsHeatmapBucketOut]

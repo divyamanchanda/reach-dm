@@ -5,6 +5,7 @@ import io
 import math
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import delete, func, or_, select, text
@@ -24,6 +25,7 @@ from app.models import (
     Vehicle,
 )
 from app.schemas import (
+    AdminAnalyticsKpisOut,
     AdminAnalyticsOut,
     AdminArchiveStaleOut,
     AdminCorridorCreateBody,
@@ -34,6 +36,7 @@ from app.schemas import (
     AdminUserCreateBody,
     AnalyticsActiveDriverOut,
     AnalyticsHeatmapBucketOut,
+    AnalyticsKpiTrendOut,
     AnalyticsResponsePointOut,
     AnalyticsVehicleDispatchOut,
     BroadcastBody,
@@ -55,6 +58,110 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 admin_user = require_role("admin", "dispatch_operator")
 
 _ACTIVE_STATUSES_EXCLUDE = ("closed", "cancelled", "recalled", "archived")
+
+_ON_DUTY_VEHICLE_STATUSES = ("available", "dispatched", "en_route", "on_scene", "transporting")
+
+
+def _analytics_windows(period: str, now: datetime) -> tuple[datetime, datetime, datetime, datetime, str]:
+    if period == "today":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = now
+        prev_end = start
+        prev_start = start - timedelta(days=1)
+        label = "yesterday"
+    elif period == "7d":
+        end = now
+        start = now - timedelta(days=7)
+        prev_end = start
+        prev_start = now - timedelta(days=14)
+        label = "prior 7 days"
+    else:
+        end = now
+        start = now - timedelta(days=30)
+        prev_end = start
+        prev_start = now - timedelta(days=60)
+        label = "prior 30 days"
+    return start, end, prev_start, prev_end, label
+
+
+def _incident_stats(db: Session, start: datetime, end: datetime) -> dict[str, int]:
+    row = db.execute(
+        text(
+            """
+            SELECT
+              COUNT(*)::int AS total,
+              COALESCE(SUM(CASE WHEN status IN ('closed', 'archived') THEN 1 ELSE 0 END), 0)::int AS cleared,
+              COALESCE(SUM(CASE WHEN status = 'recalled' THEN 1 ELSE 0 END), 0)::int AS hoax,
+              COALESCE(SUM(CASE WHEN reporter_type = 'sms_sos' OR LOWER(COALESCE(source, '')) = 'sms' THEN 1 ELSE 0 END), 0)::int AS sms,
+              COALESCE(SUM(CASE WHEN notes ILIKE '%Auto-detected crash%' THEN 1 ELSE 0 END), 0)::int AS auto
+            FROM incidents
+            WHERE created_at >= :start AND created_at < :end
+            """
+        ),
+        {"start": start, "end": end},
+    ).one()
+    total, cleared, hoax, sms, auto = row
+    total_i = int(total)
+    app = max(0, total_i - int(sms) - int(auto))
+    return {
+        "total": total_i,
+        "cleared": int(cleared),
+        "hoax": int(hoax),
+        "sms": int(sms),
+        "auto": int(auto),
+        "app": app,
+    }
+
+
+def _avg_response_minutes(db: Session, start: datetime, end: datetime) -> float | None:
+    avg_m = db.execute(
+        text(
+            """
+            SELECT AVG(EXTRACT(EPOCH FROM (fd.first_at - i.created_at)) / 60.0)
+            FROM incidents i
+            INNER JOIN (
+                SELECT incident_id, MIN(created_at) AS first_at
+                FROM dispatches
+                GROUP BY incident_id
+            ) fd ON fd.incident_id = i.id
+            WHERE i.created_at >= :start AND i.created_at < :end
+            """
+        ),
+        {"start": start, "end": end},
+    ).scalar()
+    if avg_m is None:
+        return None
+    return round(float(avg_m), 2)
+
+
+def _trend_incidents_delta(cur: int, prev: int) -> AnalyticsKpiTrendOut:
+    if cur > prev:
+        return AnalyticsKpiTrendOut(arrow="up", favorable=False)
+    if cur < prev:
+        return AnalyticsKpiTrendOut(arrow="down", favorable=True)
+    return AnalyticsKpiTrendOut(arrow="flat", favorable=True)
+
+
+def _trend_float_delta(cur: float | None, prev: float | None, *, lower_is_better: bool) -> AnalyticsKpiTrendOut:
+    if cur is None or prev is None:
+        return AnalyticsKpiTrendOut(arrow="flat", favorable=True)
+    if abs(cur - prev) < 1e-6:
+        return AnalyticsKpiTrendOut(arrow="flat", favorable=True)
+    up = cur > prev
+    arrow: Literal["up", "down", "flat"] = "up" if up else "down"
+    if lower_is_better:
+        favorable = not up
+    else:
+        favorable = up
+    return AnalyticsKpiTrendOut(arrow=arrow, favorable=favorable)
+
+
+def _trend_app_reports(cur: int, prev: int) -> AnalyticsKpiTrendOut:
+    if cur > prev:
+        return AnalyticsKpiTrendOut(arrow="up", favorable=True)
+    if cur < prev:
+        return AnalyticsKpiTrendOut(arrow="down", favorable=False)
+    return AnalyticsKpiTrendOut(arrow="flat", favorable=True)
 
 
 def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -520,22 +627,40 @@ def admin_live_map(
 
 @router.get("/analytics", response_model=AdminAnalyticsOut)
 def admin_analytics(
+    period: Literal["today", "7d", "30d"] = Query("7d", description="Time window for analytics"),
     db: Session = Depends(get_db),
     _: User = Depends(admin_user),
 ):
-    avg_m = db.execute(
-        text(
-            """
-            SELECT AVG(EXTRACT(EPOCH FROM (fd.first_at - i.created_at)) / 60.0)
-            FROM incidents i
-            INNER JOIN (
-                SELECT incident_id, MIN(created_at) AS first_at
-                FROM dispatches
-                GROUP BY incident_id
-            ) fd ON fd.incident_id = i.id
-            """
-        )
-    ).scalar()
+    now = datetime.now(timezone.utc)
+    start, end, prev_start, prev_end, comparison_label = _analytics_windows(period, now)
+
+    cur_stats = _incident_stats(db, start, end)
+    prev_stats = _incident_stats(db, prev_start, prev_end)
+
+    avg_cur = _avg_response_minutes(db, start, end)
+    avg_prev = _avg_response_minutes(db, prev_start, prev_end)
+
+    total = cur_stats["total"]
+    cleared = cur_stats["cleared"]
+    hoax_c = cur_stats["hoax"]
+    resolution_pct = round(100.0 * cleared / total, 1) if total > 0 else None
+    prev_total = prev_stats["total"]
+    prev_cleared = prev_stats["cleared"]
+    resolution_prev_pct = round(100.0 * prev_cleared / prev_total, 1) if prev_total > 0 else None
+
+    hoax_pct = round(100.0 * hoax_c / total, 1) if total > 0 else None
+    hoax_prev_pct = round(100.0 * prev_stats["hoax"] / prev_total, 1) if prev_total > 0 else None
+
+    amb_total = int(
+        db.execute(select(func.count()).select_from(Vehicle)).scalar_one(),
+    )
+    amb_on = int(
+        db.execute(
+            select(func.count())
+            .select_from(Vehicle)
+            .where(Vehicle.status.in_(_ON_DUTY_VEHICLE_STATUSES)),
+        ).scalar_one(),
+    )
 
     rt_rows = db.execute(
         text(
@@ -548,10 +673,12 @@ def admin_analytics(
                 FROM dispatches
                 GROUP BY incident_id
             ) fd ON fd.incident_id = i.id
+            WHERE i.created_at >= :start AND i.created_at < :end
             ORDER BY i.created_at DESC
             LIMIT 20
             """
-        )
+        ),
+        {"start": start, "end": end},
     ).fetchall()
     response_last_20: list[AnalyticsResponsePointOut] = []
     for rid, reported_at, mins in rt_rows:
@@ -571,10 +698,12 @@ def admin_analytics(
             SELECT FLOOR(km_marker / 20.0) * 20.0 AS seg, COUNT(*)::int AS cnt
             FROM incidents
             WHERE km_marker IS NOT NULL
+              AND created_at >= :start AND created_at < :end
             GROUP BY 1
             ORDER BY 1
             """
-        )
+        ),
+        {"start": start, "end": end},
     ).fetchall()
     heatmap_buckets = [
         AnalyticsHeatmapBucketOut(segment_start_km=float(seg), incident_count=int(cnt))
@@ -588,10 +717,13 @@ def admin_analytics(
             SELECT v.label, COUNT(d.id)::int AS cnt
             FROM dispatches d
             JOIN vehicles v ON v.id = d.vehicle_id
+            JOIN incidents i ON i.id = d.incident_id
+            WHERE i.created_at >= :start AND i.created_at < :end
             GROUP BY v.id, v.label
             ORDER BY COUNT(d.id) DESC, v.label
             """
-        )
+        ),
+        {"start": start, "end": end},
     ).fetchall()
     vehicle_dispatch_counts = [
         AnalyticsVehicleDispatchOut(vehicle_label=label, dispatch_count=cnt) for label, cnt in vu_rows
@@ -618,8 +750,34 @@ def admin_analytics(
             )
         )
 
+    kpis = AdminAnalyticsKpisOut(
+        total_incidents=total,
+        total_incidents_delta=total - prev_total,
+        total_incidents_trend=_trend_incidents_delta(total, prev_total),
+        avg_response_time_minutes=avg_cur,
+        avg_response_time_prev_minutes=avg_prev,
+        response_time_under_target=avg_cur is not None and avg_cur < 8.0,
+        avg_response_time_trend=_trend_float_delta(avg_cur, avg_prev, lower_is_better=True),
+        resolution_rate_pct=resolution_pct,
+        resolution_rate_prev_pct=resolution_prev_pct,
+        resolution_rate_trend=_trend_float_delta(resolution_pct, resolution_prev_pct, lower_is_better=False),
+        hoax_rate_pct=hoax_pct,
+        hoax_rate_prev_pct=hoax_prev_pct,
+        hoax_rate_trend=_trend_float_delta(hoax_pct, hoax_prev_pct, lower_is_better=True),
+        ambulances_on_duty=amb_on,
+        ambulances_total=amb_total,
+        ambulances_trend=AnalyticsKpiTrendOut(arrow="flat", favorable=True),
+        sos_app=cur_stats["app"],
+        sos_sms=cur_stats["sms"],
+        sos_auto=cur_stats["auto"],
+        sos_source_trend=_trend_app_reports(cur_stats["app"], prev_stats["app"]),
+    )
+
     return AdminAnalyticsOut(
-        avg_response_time_minutes=round(float(avg_m), 2) if avg_m is not None else None,
+        period=period,
+        comparison_label=comparison_label,
+        kpis=kpis,
+        avg_response_time_minutes=avg_cur,
         response_time_last_20=response_last_20,
         heatmap_buckets=heatmap_buckets,
         vehicle_dispatch_counts=vehicle_dispatch_counts,
