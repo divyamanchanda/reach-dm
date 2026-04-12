@@ -192,6 +192,7 @@ class VehicleMapOut(BaseModel):
     latitude: float | None
     longitude: float | None
     updated_at: datetime
+    driver_phone: str | None = None
 
 
 class AdminDashboardOut(BaseModel):

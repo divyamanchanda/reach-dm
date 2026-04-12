@@ -1254,3 +1254,177 @@ button:disabled {
 code {
   font-size: 0.75rem;
 }
+
+/* Dispatch: SMS alerts, critical banner, settings */
+.dispatch-settings {
+  position: relative;
+  font-size: 0.85rem;
+}
+
+.dispatch-settings-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.4rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #cbd5e1;
+  font-weight: 700;
+}
+
+.dispatch-settings-summary::-webkit-details-marker {
+  display: none;
+}
+
+.dispatch-settings-body {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 0.35rem;
+  z-index: 400;
+  min-width: 16rem;
+  padding: 0.85rem;
+  border-radius: 10px;
+  border: 1px solid #334155;
+  background: #0b1223;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.dispatch-settings-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.dispatch-settings-input {
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #020617;
+  color: #e2e8f0;
+  font-size: 0.95rem;
+}
+
+.dispatch-settings-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+}
+
+.dispatch-notify-btn {
+  margin-top: 0.65rem;
+  width: 100%;
+  background: #4338ca;
+  font-size: 0.85rem;
+}
+
+.critical-flash-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 1.25rem;
+  background: #7f1d1d;
+  color: #fecaca;
+  font-weight: 900;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  border-bottom: 2px solid #dc2626;
+  animation: critical-flash-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes critical-flash-pulse {
+  0%,
+  100% {
+    background: #7f1d1d;
+    color: #fecaca;
+  }
+  50% {
+    background: #dc2626;
+    color: #fff;
+  }
+}
+
+.critical-flash-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.critical-flash-dismiss {
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.25);
+  border: 2px solid #fecaca;
+  color: #fff;
+  font-weight: 800;
+}
+
+.detail-driver-contact {
+  margin-bottom: 1rem;
+  padding: 0.85rem;
+  border-radius: 12px;
+  border: 1px solid #334155;
+  background: rgba(15, 23, 42, 0.65);
+}
+
+.detail-driver-phone-line {
+  margin: 0 0 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.detail-driver-phone-num {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #f8fafc;
+  letter-spacing: 0.04em;
+}
+
+.detail-driver-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+a.dispatch-btn {
+  display: inline-block;
+  text-align: center;
+  text-decoration: none;
+  color: #fff;
+}
+
+.detail-sms-btn {
+  background: #0d9488;
+}
+
+.detail-call-btn {
+  background: #15803d;
+}
+
+.shift-next-op-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.65rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.shift-next-op-input {
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #020617;
+  color: #e2e8f0;
+  font-size: 0.95rem;
+}
+
+.handover-sms-btn {
+  background: #0d9488;
+  width: 100%;
+  margin-bottom: 0.5rem;
+}

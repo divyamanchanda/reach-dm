@@ -58,6 +58,7 @@ type CorridorVehicle = {
   is_available: boolean
   latitude: number | null
   longitude: number | null
+  driver_phone?: string | null
 }
 
 type NearbyVehicle = {
@@ -238,8 +239,54 @@ function playNewIncidentBeep(): void {
   }
 }
 
+/** Loud multi-beep for critical incidents (dispatch console). */
+function playCriticalAlarm(): void {
+  try {
+    const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AC) return
+    const ctx = new AC()
+    const g = ctx.createGain()
+    g.gain.value = 0.42
+    g.connect(ctx.destination)
+    const playOne = (offset: number) => {
+      const o = ctx.createOscillator()
+      o.type = 'square'
+      o.frequency.value = 920
+      o.connect(g)
+      o.start(ctx.currentTime + offset)
+      o.stop(ctx.currentTime + offset + 0.14)
+    }
+    playOne(0)
+    playOne(0.2)
+    playOne(0.4)
+    playOne(0.62)
+    window.setTimeout(() => {
+      ctx.close().catch(() => {})
+    }, 900)
+  } catch {
+    playNewIncidentBeep()
+  }
+}
+
 const SHIFT_NOTES_KEY = 'reach_dispatch_shift_notes_v1'
 const SHIFT_HANDOVER_KEY = 'reach_dispatch_shift_handover_v1'
+const OPERATOR_PHONE_KEY = 'reach_dispatch_operator_phone_v1'
+const NEXT_OPERATOR_PHONE_KEY = 'reach_dispatch_next_operator_phone_v1'
+const CRITICAL_ALERTED_KEY = 'reach_dispatch_critical_alerted_v1'
+
+function loadCriticalAlertedIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(CRITICAL_ALERTED_KEY)
+    const arr = raw ? (JSON.parse(raw) as unknown) : []
+    return new Set(Array.isArray(arr) ? arr.map(String) : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function saveCriticalAlertedIds(ids: Set<string>): void {
+  localStorage.setItem(CRITICAL_ALERTED_KEY, JSON.stringify([...ids]))
+}
 
 function isPendingDispatchStatus(status: string): boolean {
   return ['open', 'verifying', 'confirmed_real'].includes(status)
@@ -386,6 +433,31 @@ function humanizeIncidentType(incidentType: string): string {
   return incidentType
     .replace(/_/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function buildDriverDispatchSms(incident: Incident, operatorDisplayName: string): string {
+  const km =
+    incident.km_marker != null && Number.isFinite(Number(incident.km_marker))
+      ? `KM${Math.round(Number(incident.km_marker))}`
+      : 'KM—'
+  const type = humanizeIncidentType(incident.incident_type)
+  const sev = incident.severity.toLowerCase()
+  return `REACH DISPATCH: ${type} ${km} ${sev}. Proceed immediately. - ${operatorDisplayName}`
+}
+
+function normalizeTelDigits(phone: string): string {
+  const t = phone.trim()
+  if (t.startsWith('+')) return `+${t.slice(1).replace(/\D/g, '')}`
+  return t.replace(/\D/g, '')
+}
+
+function smsHref(phone: string, body: string): string {
+  const n = normalizeTelDigits(phone)
+  return `sms:${n}?body=${encodeURIComponent(body)}`
+}
+
+function telHref(phone: string): string {
+  return `tel:${normalizeTelDigits(phone)}`
 }
 
 function reportedViaLabel(reporterType: string): string {
@@ -573,6 +645,10 @@ function App() {
     }
     return null
   })
+  const [operatorPhone, setOperatorPhone] = useState(() => localStorage.getItem(OPERATOR_PHONE_KEY) ?? '')
+  const [nextOperatorPhone, setNextOperatorPhone] = useState(() => localStorage.getItem(NEXT_OPERATOR_PHONE_KEY) ?? '')
+  const [criticalBanner, setCriticalBanner] = useState<{ id: string; km: string; typeLabel: string } | null>(null)
+  const criticalAlertedRef = useRef<Set<string>>(loadCriticalAlertedIds())
   const [operatorNoteDraft, setOperatorNoteDraft] = useState<Record<string, string>>({})
   const [savingNotesForId, setSavingNotesForId] = useState<string | null>(null)
   /** Re-render periodically: NEW badges, and client-side 2h expiry vs created_at. */
@@ -591,6 +667,39 @@ function App() {
     const id = window.setInterval(() => setEtaTick((n) => n + 1), 30_000)
     return () => window.clearInterval(id)
   }, [])
+
+  useEffect(() => {
+    if (!token) return
+    for (const inc of incidents) {
+      if (inc.severity.toLowerCase() !== 'critical') continue
+      if (isExpiredOrClosedStatus(inc.status)) continue
+      if (criticalAlertedRef.current.has(inc.id)) continue
+      criticalAlertedRef.current.add(inc.id)
+      saveCriticalAlertedIds(criticalAlertedRef.current)
+      playCriticalAlarm()
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        try {
+          new Notification('REACH Dispatch — CRITICAL', {
+            body: `${humanizeIncidentType(inc.incident_type)} · KM ${inc.km_marker ?? '—'}`,
+            tag: `critical-${inc.id}`,
+            requireInteraction: true,
+          })
+        } catch {
+          /* ignore */
+        }
+      }
+      const km =
+        inc.km_marker != null && Number.isFinite(Number(inc.km_marker)) ? String(inc.km_marker) : '—'
+      setCriticalBanner({
+        id: inc.id,
+        km,
+        typeLabel: humanizeIncidentType(inc.incident_type),
+      })
+      window.setTimeout(() => {
+        setCriticalBanner((b) => (b?.id === inc.id ? null : b))
+      }, 90_000)
+    }
+  }, [incidents, token])
 
   const sortedIncidents = useMemo(() => sortIncidentsByPriority(incidents), [incidents])
 
@@ -661,7 +770,6 @@ function App() {
     })
     const bump = () => refreshLists(corridorId, token).catch(() => {})
     const onNewIncident = () => {
-      playNewIncidentBeep()
       bump()
     }
     const onDispatched = (payload: { incident_id?: string; vehicle_id?: string }) => {
@@ -749,6 +857,9 @@ function App() {
       localStorage.setItem('reach_user', JSON.stringify(res.user))
       setToken(res.access_token)
       setUser(res.user)
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        void Notification.requestPermission()
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Login failed')
       setErrorHint(null)
@@ -985,11 +1096,54 @@ function App() {
               ))}
             </select>
           </label>
+          <details className="dispatch-settings">
+            <summary className="dispatch-settings-summary">Settings</summary>
+            <div className="dispatch-settings-body">
+              <label className="dispatch-settings-label">
+                Phone number
+                <input
+                  type="tel"
+                  className="dispatch-settings-input"
+                  value={operatorPhone}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setOperatorPhone(v)
+                    localStorage.setItem(OPERATOR_PHONE_KEY, v)
+                  }}
+                  placeholder="+91…"
+                  autoComplete="tel"
+                />
+              </label>
+              <p className="hint dispatch-settings-hint">Saved on this device. Shown in SMS templates.</p>
+              {typeof Notification !== 'undefined' && Notification.permission !== 'granted' ? (
+                <button
+                  type="button"
+                  className="dispatch-notify-btn"
+                  onClick={() => void Notification.requestPermission()}
+                >
+                  Enable browser alerts
+                </button>
+              ) : (
+                <p className="hint dispatch-settings-hint">Browser alerts enabled for critical incidents.</p>
+              )}
+            </div>
+          </details>
           <button type="button" onClick={logout}>
             Log out
           </button>
         </div>
       </header>
+
+      {criticalBanner ? (
+        <div className="critical-flash-banner" role="alert">
+          <span className="critical-flash-banner-text">
+            🚨 NEW CRITICAL INCIDENT — KM {criticalBanner.km} — {criticalBanner.typeLabel}
+          </span>
+          <button type="button" className="critical-flash-dismiss" onClick={() => setCriticalBanner(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       <div className="layout">
         <aside className="list">
@@ -1270,6 +1424,37 @@ function App() {
                 </div>
               </header>
 
+              {selected.status === 'dispatched' && assignedVehicleByIncidentId[selected.id] ? (
+                <div className="detail-driver-contact">
+                  <h3 className="detail-section-title">Driver</h3>
+                  {(() => {
+                    const vid = assignedVehicleByIncidentId[selected.id].vehicle_id
+                    const drv = corridorVehicles.find((v) => v.id === vid)
+                    const driverPhone = drv?.driver_phone?.trim()
+                    const opName = user.full_name?.trim() || user.phone || 'Dispatch'
+                    const smsBody = buildDriverDispatchSms(selected, opName)
+                    return driverPhone ? (
+                      <>
+                        <p className="detail-driver-phone-line">
+                          <span className="detail-meta-label">Assigned driver phone</span>
+                          <span className="detail-driver-phone-num">{driverPhone}</span>
+                        </p>
+                        <div className="detail-driver-actions">
+                          <a className="dispatch-btn detail-sms-btn" href={smsHref(driverPhone, smsBody)}>
+                            Alert via SMS
+                          </a>
+                          <a className="dispatch-btn detail-call-btn" href={telHref(driverPhone)}>
+                            Call driver
+                          </a>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="hint">No driver phone on file for this vehicle.</p>
+                    )
+                  })()}
+                </div>
+              ) : null}
+
               <div className="detail-map-block">
                 <h3 className="detail-section-title">Location</h3>
                 <div className="map-placeholder detail-map-placeholder">
@@ -1483,6 +1668,21 @@ function App() {
         <aside className="shift-notes-panel">
           <h3>Shift notes</h3>
           <p className="hint shift-notes-hint">Saved on this device. Use at end of shift.</p>
+          <label className="shift-next-op-label">
+            Next operator phone (handover)
+            <input
+              type="tel"
+              className="shift-next-op-input"
+              value={nextOperatorPhone}
+              onChange={(e) => {
+                const v = e.target.value
+                setNextOperatorPhone(v)
+                localStorage.setItem(NEXT_OPERATOR_PHONE_KEY, v)
+              }}
+              placeholder="+91…"
+              autoComplete="tel"
+            />
+          </label>
           <textarea
             className="shift-notes-textarea"
             rows={12}
@@ -1503,6 +1703,18 @@ function App() {
             </span>
           </div>
           <div className="shift-notes-actions">
+            <button
+              type="button"
+              className="dispatch-btn handover-sms-btn"
+              disabled={!nextOperatorPhone.trim() || !shiftNotes.trim()}
+              onClick={() => {
+                const to = nextOperatorPhone.trim()
+                const body = `REACH handover from ${user.full_name?.trim() || user.phone || 'operator'}:\n\n${shiftNotes.trim()}`
+                window.location.href = smsHref(to, body)
+              }}
+            >
+              Send handover SMS
+            </button>
             <button
               type="button"
               className="dispatch-btn handover-btn"

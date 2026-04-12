@@ -139,9 +139,13 @@ def list_vehicles(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    q = select(Vehicle, Vehicle.lat.label("lat"), Vehicle.lng.label("lng")).where(Vehicle.corridor_id == corridor_id)
+    q = (
+        select(Vehicle, Vehicle.lat.label("lat"), Vehicle.lng.label("lng"), User.phone)
+        .where(Vehicle.corridor_id == corridor_id)
+        .outerjoin(User, User.id == Vehicle.driver_user_id)
+    )
     out: list[VehicleMapOut] = []
-    for v, lat, lng in db.execute(q).all():
+    for v, lat, lng, driver_phone in db.execute(q).all():
         out.append(
             VehicleMapOut(
                 id=v.id,
@@ -152,6 +156,7 @@ def list_vehicles(
                 latitude=float(lat) if lat is not None else None,
                 longitude=float(lng) if lng is not None else None,
                 updated_at=v.updated_at,
+                driver_phone=str(driver_phone) if driver_phone else None,
             )
         )
     return out
