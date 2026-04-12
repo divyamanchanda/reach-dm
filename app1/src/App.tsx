@@ -136,16 +136,27 @@ function isExpiredOrClosedStatus(status: string): boolean {
   return status === 'expired' || status === 'closed' || status === 'archived'
 }
 
-/** Active first; then expired/closed. Within each bucket: severity, then newest first. */
+/** 0 = active; 1 = closed/archived; 2 = expired (always last). */
+function listSortBucket(status: string): number {
+  if (status === 'expired') return 2
+  if (status === 'closed' || status === 'archived') return 1
+  return 0
+}
+
+/** Active and in-flight first; then closed/archived; expired last. Within bucket: severity, then newest first. */
 function sortIncidentsByPriority(items: Incident[]): Incident[] {
   return [...items].sort((a, b) => {
-    const ab = isExpiredOrClosedStatus(a.status) ? 1 : 0
-    const bb = isExpiredOrClosedStatus(b.status) ? 1 : 0
+    const ab = listSortBucket(a.status)
+    const bb = listSortBucket(b.status)
     if (ab !== bb) return ab - bb
     const rs = severityRank(a.severity) - severityRank(b.severity)
     if (rs !== 0) return rs
     return +new Date(b.created_at) - +new Date(a.created_at)
   })
+}
+
+function isStatusExpired(status: string): boolean {
+  return status === 'expired'
 }
 
 const AVG_CORRIDOR_KMH = 80
@@ -468,6 +479,8 @@ function App() {
   >({})
   const [corridorVehicles, setCorridorVehicles] = useState<CorridorVehicle[]>([])
   const [expandedTimelineId, setExpandedTimelineId] = useState<string | null>(null)
+  /** Status `expired` cards: collapsed by default until operator expands. */
+  const [expiredCardsExpanded, setExpiredCardsExpanded] = useState<Record<string, boolean>>({})
   const [timelineById, setTimelineById] = useState<Record<string, IncidentDetail>>({})
   const [etaTick, setEtaTick] = useState(0)
   const [shiftNotes, setShiftNotes] = useState(() => localStorage.getItem(SHIFT_NOTES_KEY) ?? '')
@@ -909,37 +922,83 @@ function App() {
           {sortedIncidents.map((i) => {
             void etaTick
             void ageTick
+            const isExp = isStatusExpired(i.status)
+            const expiredExpanded = !!expiredCardsExpanded[i.id]
+            const isExpCollapsed = isExp && !expiredExpanded
+            const hidePriorityBadge = i.status === 'expired' || i.status === 'closed'
             return (
             <div
               key={i.id}
               role="button"
               tabIndex={0}
-              className={`inc-card ${selectedId === i.id ? 'active' : ''} ${dispatchUrgencyClass(i.created_at, i.status)}`}
+              className={`inc-card ${selectedId === i.id ? 'active' : ''} ${dispatchUrgencyClass(i.created_at, i.status)} ${isExp ? 'inc-card--expired' : ''}`}
               onClick={() => {
                 setSelectedId(i.id)
+                if (isExp && !expiredCardsExpanded[i.id]) {
+                  setExpiredCardsExpanded((p) => ({ ...p, [i.id]: true }))
+                  return
+                }
                 setExpandedTimelineId((e) => (e === i.id ? null : i.id))
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
                   setSelectedId(i.id)
+                  if (isExp && !expiredCardsExpanded[i.id]) {
+                    setExpiredCardsExpanded((p) => ({ ...p, [i.id]: true }))
+                    return
+                  }
                   setExpandedTimelineId((ex) => (ex === i.id ? null : i.id))
                 }
               }}
-              style={{ borderLeftColor: severityColor[i.severity] ?? '#64748b' }}
+              style={{ borderLeftColor: isExp ? '#64748b' : severityColor[i.severity] ?? '#64748b' }}
             >
+              {isExpCollapsed ? (
+                <>
+                  <div className="row">
+                    <strong>{i.incident_type}</strong>
+                    <span className="pill pill--expired-label">Expired</span>
+                  </div>
+                  <div className="meta">KM {i.km_marker ?? '—'}</div>
+                  <div className="meta">{relativeReportedTime(i.created_at)}</div>
+                </>
+              ) : (
+                <>
               <div className="row">
                 <strong>{i.incident_type}</strong>
                 <div className="chip-row">
-                  {i.severity.toLowerCase() === 'critical' && (
+                  {i.severity.toLowerCase() === 'critical' && !hidePriorityBadge && (
                     <span className="priority-badge">PRIORITY</span>
                   )}
-                  {isNewIncident(i.created_at) && <span className="new-pill">NEW</span>}
-                  <span className="pill" style={{ background: severityColor[i.severity] }}>
-                    {i.severity}
-                  </span>
+                  {!isExp && isNewIncident(i.created_at) && <span className="new-pill">NEW</span>}
+                  {isExp ? (
+                    <span className="pill pill--expired-label">Expired</span>
+                  ) : (
+                    <span className="pill" style={{ background: severityColor[i.severity] }}>
+                      {i.severity}
+                    </span>
+                  )}
                 </div>
               </div>
+              {isExp && expiredExpanded ? (
+                <div className="inc-card-expired-toolbar">
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setExpiredCardsExpanded((p) => {
+                        const next = { ...p }
+                        delete next[i.id]
+                        return next
+                      })
+                      setExpandedTimelineId((ex) => (ex === i.id ? null : ex))
+                    }}
+                  >
+                    Show less
+                  </button>
+                </div>
+              ) : null}
               <div className="meta inc-card-trust-line">
                 <DispatchTrustBadge incident={i} detail={selectedId === i.id ? incidentDetail : null} />
               </div>
@@ -1022,11 +1081,11 @@ function App() {
                   </div>
                 )
               ) : null}
-              {isIncidentExpiredByAge(i.created_at) || i.status === 'expired' ? (
+              {isIncidentExpiredByAge(i.created_at) && i.status !== 'expired' ? (
                 <span className="expired-badge" title="Older than 2 hours since created — no actions available">
                   Expired
                 </span>
-              ) : i.status === 'recalled' ? (
+              ) : i.status === 'expired' ? null : i.status === 'recalled' ? (
                 <p className="recall-msg">Ambulance recalled — hoax confirmed</p>
               ) : i.status === 'confirmed_real' ? (
                 <p className="confirm-msg">Incident verified as real ✓</p>
@@ -1095,6 +1154,8 @@ function App() {
                 >
                   {dispatchingByIncidentId[i.id] ? 'Dispatching...' : 'Dispatch'}
                 </button>
+              )}
+                </>
               )}
             </div>
             )

@@ -492,6 +492,25 @@ button:disabled {
   outline: 2px solid #3b82f6;
 }
 
+.inc-card--expired {
+  opacity: 0.5;
+}
+
+.pill--expired-label {
+  background: #475569 !important;
+  color: #cbd5e1 !important;
+  font-weight: 700;
+  font-size: 0.72rem;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.inc-card-expired-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0.15rem 0 0.35rem;
+}
+
 .priority-badge {
   font-size: 0.55rem;
   font-weight: 800;
