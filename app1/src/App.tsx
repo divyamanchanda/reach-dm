@@ -369,6 +369,81 @@ function DispatchTrustBadge({
   )
 }
 
+function incidentTypeIcon(incidentType: string): string {
+  const t = incidentType.toLowerCase().replace(/_/g, ' ')
+  if (t.includes('accident')) return '🚗'
+  if (t.includes('pedestrian')) return '🚶'
+  if (t.includes('truck')) return '🚛'
+  if (t.includes('medical')) return '🏥'
+  if (t.includes('fire')) return '🔥'
+  if (t.includes('motorcycle') || t.includes('bike')) return '🏍️'
+  if (t.includes('animal')) return '🐄'
+  if (t.includes('hazard') || t.includes('debris')) return '⚠️'
+  return '📋'
+}
+
+function humanizeIncidentType(incidentType: string): string {
+  return incidentType
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function reportedViaLabel(reporterType: string): string {
+  const r = reporterType.toLowerCase().trim()
+  if (r === 'public_sos') return 'Public SOS app'
+  if (r === 'sms' || r.includes('sms')) return 'SMS'
+  return humanizeIncidentType(reporterType)
+}
+
+function formatTrustFactorBullet(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object' || !('factor' in raw)) return null
+  const o = raw as { factor?: string; weight?: number; count?: number; note?: string }
+  switch (o.factor) {
+    case 'public_sos_gps':
+      return '📍 GPS location provided by reporter'
+    case 'public_sos_no_gps':
+      return '📍 No GPS — location estimated from KM marker'
+    case 'no_gps_deduction':
+      return '📍 Trust score reduced for missing GPS'
+    case 'photo_uploaded':
+      return '📷 Photo attached to report'
+    case 'multiple_reports':
+      return `👥 ${typeof o.count === 'number' ? o.count : 'Multiple'} nearby reports corroborate this incident`
+    case 'single_report':
+      return '👤 Only one report in the area'
+    case 'sms_report':
+      return '📱 Reported via SMS channel'
+    case 'ai_verified':
+      return o.note ? `✓ ${o.note}` : '✓ Automated assessment: likely real'
+    default:
+      if (typeof o.note === 'string' && o.note.trim()) return `• ${o.note}`
+      if (o.factor) return `• ${o.factor.replace(/_/g, ' ')}`
+      return null
+  }
+}
+
+function severityDetailBadgeClass(severity: string): string {
+  const s = severity.toLowerCase()
+  if (s === 'critical') return 'detail-pill detail-pill--sev-critical'
+  if (s === 'major') return 'detail-pill detail-pill--sev-major'
+  if (s === 'minor') return 'detail-pill detail-pill--sev-minor'
+  return 'detail-pill detail-pill--muted'
+}
+
+function statusDetailBadgeClass(status: string): string {
+  const s = status.toLowerCase()
+  if (s === 'closed' || s === 'archived' || s === 'expired' || s === 'cancelled') return 'detail-pill detail-pill--st-muted'
+  if (s === 'recalled') return 'detail-pill detail-pill--st-danger'
+  if (s === 'confirmed_real' || s === 'arrived' || s === 'on_scene') return 'detail-pill detail-pill--st-ok'
+  if (s === 'dispatched' || s === 'en_route' || s === 'accepted') return 'detail-pill detail-pill--st-warn'
+  if (s === 'open' || s === 'verifying') return 'detail-pill detail-pill--st-info'
+  return 'detail-pill detail-pill--muted'
+}
+
+function humanizeTimelineEventType(eventType: string): string {
+  return eventType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 const DISPATCH_NO_AMBULANCE = '__reach_no_ambulance__'
 
 const DISPATCH_BTN_HINT =
@@ -1451,90 +1526,135 @@ function App() {
           role="presentation"
         >
           <section
-            className="incident-modal"
+            className="incident-modal incident-detail-modal"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label="Incident details"
           >
-            <div className="incident-modal-header">
-              <h2>Incident details</h2>
-              <button type="button" onClick={() => setIsDetailOpen(false)}>
-                Close
-              </button>
-            </div>
-            <dl className="kv modal-kv">
-              <dt>ID</dt>
-              <dd>{selected.id}</dd>
-              <dt>Type</dt>
-              <dd>{selected.incident_type}</dd>
-              <dt>Severity</dt>
-              <dd>{selected.severity}</dd>
-              <dt>Status</dt>
-              <dd>{selected.status}</dd>
-              <dt>Corridor</dt>
-              <dd>{selected.corridor_id}</dd>
-              <dt>Reporter</dt>
-              <dd>{selected.reporter_type}</dd>
-              <dt>KM marker</dt>
-              <dd>{incidentDetail?.km_marker ?? selected.km_marker ?? '—'}</dd>
-              <dt>Injured count</dt>
-              <dd>{incidentDetail?.injured_count ?? selected.injured_count}</dd>
-              <dt>Created</dt>
-              <dd>{new Date(selected.created_at).toLocaleString()}</dd>
-              <dt>Updated</dt>
-              <dd>{new Date(selected.updated_at).toLocaleString()}</dd>
-              <dt>Photo URL</dt>
-              <dd>
-                {incidentDetail?.photo_url ? (
-                  <a className="link" href={incidentDetail.photo_url} target="_blank" rel="noreferrer">
-                    Open photo
-                  </a>
-                ) : (
-                  '—'
-                )}
-              </dd>
-              <dt>Location link</dt>
-              <dd>
-                {(() => {
-                  const lat = incidentDetail?.latitude ?? selected.latitude
-                  const lng = incidentDetail?.longitude ?? selected.longitude
-                  if (lat == null || lng == null) return '—'
-                  return (
-                    <a
-                      className="link"
-                      href={`https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=14/${lat}/${lng}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open map location
-                    </a>
-                  )
-                })()}
-              </dd>
-              <dt>Notes</dt>
-              <dd className="notes-dd modal-notes">
-                {incidentDetail?.notes?.trim() ? incidentDetail.notes : '—'}
-              </dd>
-            </dl>
-            {incidentDetail?.trust_factors?.length ? (
-              <div className="modal-section">
-                <h4>Trust factors</h4>
-                <pre className="json-block">{JSON.stringify(incidentDetail.trust_factors, null, 2)}</pre>
-              </div>
-            ) : null}
-            {incidentDetail?.timeline?.length ? (
-              <div className="modal-section">
-                <h4>Timeline</h4>
-                <ul className="vehicle-list">
-                  {incidentDetail.timeline.map((ev) => (
-                    <li key={ev.id}>
-                      <strong>{ev.event_type}</strong> - {new Date(ev.created_at).toLocaleString()}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
+            {(() => {
+              const detail = incidentDetail?.id === selected.id ? incidentDetail : null
+              const src = detail ?? selected
+              const trust = deriveDispatchTrustDisplay({
+                status: src.status,
+                trust_factors: detail?.trust_factors ?? selected.trust_factors ?? [],
+                latitude: detail?.latitude ?? selected.latitude,
+                longitude: detail?.longitude ?? selected.longitude,
+              })
+              const km = detail?.km_marker ?? selected.km_marker
+              const corridorName = corridors.find((c) => c.id === selected.corridor_id)?.name ?? 'NH48'
+              const locationLine =
+                km != null && Number.isFinite(Number(km)) ? `KM ${Number(km)} on ${corridorName}` : '—'
+              const factorBullets = (detail?.trust_factors ?? selected.trust_factors ?? [])
+                .map((raw) => formatTrustFactorBullet(raw))
+                .filter((x): x is string => Boolean(x))
+              const notesText = detail?.notes?.trim() ? detail.notes : '—'
+              const typeIcon = incidentTypeIcon(selected.incident_type)
+              const typeLabel = humanizeIncidentType(selected.incident_type)
+              return (
+                <>
+                  <div className="incident-modal-header">
+                    <h2>Incident details</h2>
+                    <button type="button" onClick={() => setIsDetailOpen(false)}>
+                      Close
+                    </button>
+                  </div>
+                  <div className="detail-modal-grid">
+                    <div className="detail-modal-card">
+                      <div className="detail-field">
+                        <span className="detail-field-label">Type</span>
+                        <div className="detail-field-value detail-type-row">
+                          <span className="detail-type-icon" aria-hidden>
+                            {typeIcon}
+                          </span>
+                          <span>{typeLabel}</span>
+                        </div>
+                      </div>
+                      <div className="detail-field">
+                        <span className="detail-field-label">Severity</span>
+                        <div>
+                          <span className={severityDetailBadgeClass(selected.severity)}>
+                            {humanizeIncidentType(selected.severity)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="detail-field">
+                        <span className="detail-field-label">Status</span>
+                        <div>
+                          <span className={statusDetailBadgeClass(selected.status)}>{statusLabel(selected.status)}</span>
+                        </div>
+                      </div>
+                      <div className="detail-field">
+                        <span className="detail-field-label">Reported via</span>
+                        <div className="detail-field-value">{reportedViaLabel(selected.reporter_type)}</div>
+                      </div>
+                      <div className="detail-field">
+                        <span className="detail-field-label">Location</span>
+                        <div className="detail-field-value detail-location-line">{locationLine}</div>
+                      </div>
+                    </div>
+                    <div className="detail-modal-card">
+                      <div className="detail-field">
+                        <span className="detail-field-label">Verification</span>
+                        <div className="detail-verification-block">
+                          <span className="detail-verification-emoji" aria-hidden>
+                            {trust.emoji}
+                          </span>
+                          <div>
+                            <div className="detail-verification-label">{trust.label}</div>
+                            <div className="detail-verification-sub">
+                              {trust.reporterCount} {trust.reporterCount === 1 ? 'report' : 'reports'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="detail-field">
+                        <span className="detail-field-label">Reported at</span>
+                        <div className="detail-field-value detail-reported-time">
+                          {new Date(selected.created_at).toLocaleString()}
+                          <span className="detail-reported-relative">{relativeReportedTime(selected.created_at)}</span>
+                        </div>
+                      </div>
+                      <div className="detail-field">
+                        <span className="detail-field-label">Injured</span>
+                        <div className="detail-field-value detail-injured-num">
+                          {detail?.injured_count ?? selected.injured_count}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="detail-modal-card detail-modal-notes-card">
+                    <span className="detail-field-label">Notes</span>
+                    <p className="detail-notes-body">{notesText}</p>
+                  </div>
+                  {factorBullets.length > 0 ? (
+                    <div className="detail-modal-card detail-trust-factors-card">
+                      <h3 className="detail-modal-section-title">Trust factors</h3>
+                      <ul className="detail-trust-factors-list">
+                        {factorBullets.map((line, idx) => (
+                          <li key={`${idx}-${line.slice(0, 24)}`}>{line}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {detail?.timeline?.length ? (
+                    <div className="detail-modal-card detail-modal-timeline-card">
+                      <h3 className="detail-modal-section-title">Timeline</h3>
+                      <ul className="detail-timeline-modal-list">
+                        {detail.timeline.map((ev) => (
+                          <li key={ev.id}>
+                            <span className="detail-timeline-modal-ev">{humanizeTimelineEventType(ev.event_type)}</span>
+                            <span className="detail-timeline-modal-time">
+                              {new Date(ev.created_at).toLocaleString()}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </>
+              )
+            })()}
           </section>
         </div>
       )}
