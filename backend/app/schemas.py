@@ -223,6 +223,8 @@ class AdminDashboardOut(BaseModel):
     active_incidents: int
     total_vehicles: int
     total_corridors: int
+    dispatched_incidents: int
+    closed_today: int
 
 
 class AdminArchiveStaleOut(BaseModel):
@@ -313,10 +315,32 @@ class AdminIncidentDetailOut(BaseModel):
     status: str
     trust_score: int
     km_marker: float | None
+    latitude: float | None
+    longitude: float | None
     public_report_id: str | None
     created_at: datetime
+    reporter_type: str
+    injured_count: int
+    notes: str | None
+    sos_details: dict | None
+    assigned_vehicle_id: uuid.UUID | None
     assigned_vehicle_label: str | None
+    driver_name: str | None
+    eta_minutes: float | None
     timeline: list[TimelineEventOut]
+
+
+class AdminVehicleDashboardOut(BaseModel):
+    id: uuid.UUID
+    label: str
+    corridor_name: str
+    driver_name: str | None
+    status: str
+    is_available: bool
+    km_marker: float | None
+    latitude: float | None
+    longitude: float | None
+    updated_at: datetime
 
 
 class BroadcastBody(BaseModel):

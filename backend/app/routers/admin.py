@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +11,7 @@ from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.geo_utils import incident_lat_lng, nh48_km_from_lat_lng
 from app.models import (
     BroadcastMessage,
     Corridor,
@@ -28,6 +30,7 @@ from app.schemas import (
     AdminDashboardOut,
     AdminIncidentDetailOut,
     AdminRecentIncidentItem,
+    AdminVehicleDashboardOut,
     AdminUserCreateBody,
     AnalyticsActiveDriverOut,
     AnalyticsHeatmapBucketOut,
@@ -51,6 +54,24 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 admin_user = require_role("admin", "dispatch_operator")
 
+_ACTIVE_STATUSES_EXCLUDE = ("closed", "cancelled", "recalled", "archived")
+
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _eta_minutes_from_distance_m(m: float) -> float:
+    if m <= 0:
+        return 0.0
+    km = m / 1000.0
+    return round((km / 40.0) * 60.0, 1)
+
 
 def _default_organisation_id(db: Session) -> uuid.UUID:
     oid = db.execute(select(Organisation.id).limit(1)).scalar_one_or_none()
@@ -69,7 +90,19 @@ def admin_dashboard(
 ):
     active = db.execute(
         select(func.count()).select_from(Incident).where(
-            Incident.status.notin_(["closed", "cancelled", "recalled", "archived"]),
+            Incident.status.notin_(list(_ACTIVE_STATUSES_EXCLUDE)),
+        )
+    ).scalar_one()
+    dispatched = db.execute(
+        select(func.count()).select_from(Incident).where(
+            Incident.status.in_(["dispatched", "en_route", "on_scene", "transporting"]),
+        )
+    ).scalar_one()
+    start_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    closed_today = db.execute(
+        select(func.count()).select_from(Incident).where(
+            Incident.status.in_(["closed", "archived", "expired", "cancelled", "recalled"]),
+            Incident.updated_at >= start_utc,
         )
     ).scalar_one()
     v_count = db.execute(select(func.count()).select_from(Vehicle)).scalar_one()
@@ -78,6 +111,8 @@ def admin_dashboard(
         active_incidents=int(active),
         total_vehicles=int(v_count),
         total_corridors=int(c_count),
+        dispatched_incidents=int(dispatched),
+        closed_today=int(closed_today),
     )
 
 
@@ -138,6 +173,73 @@ def admin_recent_incidents(
     return out
 
 
+@router.get("/incidents/active", response_model=list[AdminRecentIncidentItem])
+def admin_active_incidents(
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+    limit: int = Query(100, ge=1, le=200),
+):
+    q = (
+        select(Incident, Corridor.name)
+        .join(Corridor, Incident.corridor_id == Corridor.id)
+        .where(Incident.status.notin_(list(_ACTIVE_STATUSES_EXCLUDE)))
+        .order_by(Incident.created_at.desc())
+        .limit(limit)
+    )
+    out: list[AdminRecentIncidentItem] = []
+    for inc, corridor_name in db.execute(q).all():
+        out.append(
+            AdminRecentIncidentItem(
+                id=inc.id,
+                corridor_id=inc.corridor_id,
+                corridor_name=corridor_name,
+                incident_type=inc.incident_type,
+                severity=inc.severity,
+                status=inc.status,
+                km_marker=inc.km_marker,
+                created_at=inc.created_at,
+            )
+        )
+    return out
+
+
+@router.get("/vehicles", response_model=list[AdminVehicleDashboardOut])
+def admin_vehicles_dashboard(
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+):
+    rows = db.execute(
+        select(Vehicle, Corridor.name)
+        .join(Corridor, Vehicle.corridor_id == Corridor.id)
+        .order_by(Corridor.name, Vehicle.label)
+    ).all()
+    out: list[AdminVehicleDashboardOut] = []
+    for v, corridor_name in rows:
+        driver_name: str | None = None
+        if v.driver_user_id:
+            drv = db.get(User, v.driver_user_id)
+            if drv is not None:
+                driver_name = (drv.full_name or drv.phone or "").strip() or None
+        km_val: float | None = None
+        if v.lat is not None and v.lng is not None:
+            km_val = round(nh48_km_from_lat_lng(float(v.lat), float(v.lng)), 1)
+        out.append(
+            AdminVehicleDashboardOut(
+                id=v.id,
+                label=v.label,
+                corridor_name=corridor_name,
+                driver_name=driver_name,
+                status=v.status,
+                is_available=v.is_available,
+                km_marker=km_val,
+                latitude=float(v.lat) if v.lat is not None else None,
+                longitude=float(v.lng) if v.lng is not None else None,
+                updated_at=v.updated_at,
+            )
+        )
+    return out
+
+
 @router.get("/incidents/{incident_id}", response_model=AdminIncidentDetailOut)
 def admin_incident_detail(
     incident_id: uuid.UUID,
@@ -149,13 +251,46 @@ def admin_incident_detail(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
 
     last_dispatch = db.execute(
-        select(Dispatch, Vehicle.label)
+        select(Dispatch, Vehicle)
         .join(Vehicle, Dispatch.vehicle_id == Vehicle.id)
         .where(Dispatch.incident_id == incident_id)
         .order_by(Dispatch.created_at.desc())
         .limit(1)
     ).first()
-    assigned_vehicle_label = last_dispatch[1] if last_dispatch else None
+
+    assigned_vehicle_id: uuid.UUID | None = None
+    assigned_vehicle_label: str | None = None
+    driver_name: str | None = None
+    eta_minutes: float | None = None
+    if last_dispatch:
+        _d, veh = last_dispatch
+        assigned_vehicle_id = veh.id
+        assigned_vehicle_label = veh.label
+        if veh.driver_user_id:
+            drv = db.get(User, veh.driver_user_id)
+            if drv is not None:
+                driver_name = (drv.full_name or drv.phone or "").strip() or None
+        ilat, ilng = incident_lat_lng(db, incident)
+        if (
+            veh.lat is not None
+            and veh.lng is not None
+            and ilat is not None
+            and ilng is not None
+        ):
+            dist_m = _haversine_m(float(ilat), float(ilng), float(veh.lat), float(veh.lng))
+            eta_minutes = _eta_minutes_from_distance_m(dist_m)
+
+    lat_out: float | None
+    lng_out: float | None
+    ilat, ilng = incident_lat_lng(db, incident)
+    lat_out = float(ilat) if ilat is not None else None
+    lng_out = float(ilng) if ilng is not None else None
+
+    sos = incident.sos_details
+    if isinstance(sos, dict):
+        sos_out: dict | None = dict(sos)
+    else:
+        sos_out = None
 
     timeline = db.execute(
         select(IncidentEvent)
@@ -170,9 +305,18 @@ def admin_incident_detail(
         status=incident.status,
         trust_score=incident.trust_score,
         km_marker=incident.km_marker,
+        latitude=lat_out,
+        longitude=lng_out,
         public_report_id=incident.public_report_id,
         created_at=incident.created_at,
+        reporter_type=incident.reporter_type,
+        injured_count=incident.injured_count,
+        notes=incident.notes,
+        sos_details=sos_out,
+        assigned_vehicle_id=assigned_vehicle_id,
         assigned_vehicle_label=assigned_vehicle_label,
+        driver_name=driver_name,
+        eta_minutes=eta_minutes,
         timeline=timeline,
     )
 

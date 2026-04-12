@@ -23,6 +23,8 @@ type Dashboard = {
   active_incidents: number
   total_vehicles: number
   total_corridors: number
+  dispatched_incidents: number
+  closed_today: number
 }
 
 type TimelineEvent = {
@@ -39,10 +41,32 @@ type IncidentDetail = {
   status: string
   trust_score: number
   km_marker: number | null
+  latitude?: number | null
+  longitude?: number | null
   public_report_id: string | null
   created_at: string
+  reporter_type?: string
+  injured_count?: number
+  notes?: string | null
+  sos_details?: Record<string, unknown> | null
+  assigned_vehicle_id?: string | null
   assigned_vehicle_label: string | null
+  driver_name?: string | null
+  eta_minutes?: number | null
   timeline: TimelineEvent[]
+}
+
+type AdminVehicleRow = {
+  id: string
+  label: string
+  corridor_name: string
+  driver_name: string | null
+  status: string
+  is_available: boolean
+  km_marker: number | null
+  latitude: number | null
+  longitude: number | null
+  updated_at: string
 }
 
 type RecentIncident = {
@@ -183,6 +207,51 @@ function severityRowClass(sev: string): string {
   if (s === 'critical') return 'feed-row-sev-critical'
   if (s === 'major') return 'feed-row-sev-major'
   return 'feed-row-sev-minor'
+}
+
+function incidentRowClass(i: RecentIncident): string {
+  const st = i.status.toLowerCase()
+  if (['closed', 'archived', 'expired', 'cancelled', 'recalled'].includes(st)) {
+    return 'feed-row--done'
+  }
+  return severityRowClass(i.severity)
+}
+
+function incidentTypeEmoji(t: string): string {
+  const s = t.toLowerCase()
+  if (s.includes('fire')) return '🔥'
+  if (s.includes('medical')) return '🏥'
+  if (s.includes('breakdown')) return '🛑'
+  if (s.includes('accident')) return '🚗'
+  if (s.includes('obstacle')) return '🚧'
+  return '⚠️'
+}
+
+function hazardIdLabel(id: string): string {
+  const m: Record<string, string> = {
+    fire_smoke: 'Fire/smoke',
+    fuel_spill: 'Fuel spill',
+    live_wire: 'Live wire down',
+    lane_blocked: 'Lane blocked',
+    none_visible: 'None visible',
+  }
+  return m[id] || id
+}
+
+function directionHuman(d: unknown): string {
+  if (d === 'towards_chennai') return 'Towards Chennai'
+  if (d === 'towards_bengaluru') return 'Towards Bengaluru'
+  if (typeof d === 'string' && d) return d
+  return '—'
+}
+
+type DashboardSection = 'recent' | 'active' | 'vehicles' | 'corridors'
+
+function vehicleStatusToneClass(status: string, isAvailable: boolean): string {
+  const s = status.toLowerCase()
+  if (s === 'available' && isAvailable) return 'veh-row--avail'
+  if (['dispatched', 'en_route', 'on_scene', 'transporting'].includes(s)) return 'veh-row--dispatched'
+  return 'veh-row--offline'
 }
 
 function incidentDotColor(sev: string): string {
@@ -882,6 +951,83 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
   )
 }
 
+function IncidentMiniMap({
+  leafletReady,
+  latitude,
+  longitude,
+}: {
+  leafletReady: boolean
+  latitude: number | null
+  longitude: number | null
+}) {
+  const hostRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!leafletReady || latitude == null || longitude == null) return
+    const L = (window as unknown as { L?: any }).L
+    if (!L || !hostRef.current) return
+    const el = hostRef.current
+    const map = L.map(el).setView([latitude, longitude], 10)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap',
+    }).addTo(map)
+    L.circleMarker([latitude, longitude], {
+      radius: 11,
+      color: '#b91c1c',
+      fillColor: '#ef4444',
+      fillOpacity: 0.95,
+      weight: 2,
+    }).addTo(map)
+    const nh = [estimatePointFromKm(0), estimatePointFromKm(NH48_KM_LENGTH)]
+    L.polyline(
+      nh.map((p) => [p.lat, p.lng]),
+      { color: '#64748b', weight: 3, opacity: 0.55 },
+    ).addTo(map)
+    return () => {
+      map.remove()
+    }
+  }, [leafletReady, latitude, longitude])
+
+  if (latitude == null || longitude == null) {
+    return <p className="muted incident-map-fallback">No map position (add GPS or KM to the incident).</p>
+  }
+  if (!leafletReady) {
+    return <div className="leaflet-box incident-mini-map map-loading">Loading map…</div>
+  }
+  return <div className="leaflet-box incident-mini-map" ref={hostRef} />
+}
+
+function buildPhaseTimes(detail: IncidentDetail): {
+  created: string | null
+  dispatched: string | null
+  arrived: string | null
+  cleared: string | null
+} {
+  const out = {
+    created: null as string | null,
+    dispatched: null as string | null,
+    arrived: null as string | null,
+    cleared: null as string | null,
+  }
+  out.created = detail.timeline.find((e) => e.event_type === 'created')?.created_at ?? detail.created_at
+  for (const ev of detail.timeline) {
+    if (ev.event_type === 'dispatch' && !out.dispatched) out.dispatched = ev.created_at
+    if (ev.event_type === 'status_change') {
+      const st = (ev.payload as { status?: string } | null)?.status?.toLowerCase()
+      if (st === 'on_scene' && !out.arrived) out.arrived = ev.created_at
+      if (['closed', 'archived', 'cancelled', 'recalled', 'expired'].includes(st || '') && !out.cleared) {
+        out.cleared = ev.created_at
+      }
+    }
+  }
+  const st = detail.status.toLowerCase()
+  if (['closed', 'archived', 'cancelled', 'recalled', 'expired'].includes(st) && !out.cleared) {
+    const last = [...detail.timeline].reverse().find((e) => e.event_type === 'status_change')
+    out.cleared = last?.created_at ?? detail.created_at
+  }
+  return out
+}
+
 export default function App() {
   const leafletReady = useLeafletReady()
   const [token, setToken] = useState<string | null>(() => {
@@ -905,6 +1051,9 @@ export default function App() {
   const [apiOk, setApiOk] = useState<boolean | null>(null)
   const [dash, setDash] = useState<Dashboard | null>(null)
   const [recent, setRecent] = useState<RecentIncident[]>([])
+  const [dashboardSection, setDashboardSection] = useState<DashboardSection>('recent')
+  const [activeIncidents, setActiveIncidents] = useState<RecentIncident[]>([])
+  const [vehiclesDash, setVehiclesDash] = useState<AdminVehicleRow[]>([])
   const [liveMap, setLiveMap] = useState<LiveMapCorridor[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [corridors, setCorridors] = useState<CorridorRow[]>([])
@@ -971,9 +1120,35 @@ export default function App() {
       fetchJson<Dashboard>('/admin/dashboard', token),
       fetchJson<RecentIncident[]>('/admin/incidents/recent?limit=10', token),
     ])
-    setDash(d)
+    setDash({
+      ...d,
+      dispatched_incidents: d.dispatched_incidents ?? 0,
+      closed_today: d.closed_today ?? 0,
+    })
     setRecent(r)
   }, [token])
+
+  const loadActiveIncidents = useCallback(async () => {
+    if (!token) return
+    setPageErr(null)
+    try {
+      setActiveIncidents(await fetchJson<RecentIncident[]>('/admin/incidents/active?limit=100', token))
+    } catch (e: unknown) {
+      if (isSessionExpiredError(e)) return
+      reportApiErr(e, 'Failed to load active incidents')
+    }
+  }, [token, reportApiErr])
+
+  const loadVehiclesDashboard = useCallback(async () => {
+    if (!token) return
+    setPageErr(null)
+    try {
+      setVehiclesDash(await fetchJson<AdminVehicleRow[]>('/admin/vehicles', token))
+    } catch (e: unknown) {
+      if (isSessionExpiredError(e)) return
+      reportApiErr(e, 'Failed to load vehicles')
+    }
+  }, [token, reportApiErr])
 
   const loadMap = useCallback(async () => {
     if (!token) return
@@ -1358,7 +1533,14 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              <div className="stat-card stat-card-lg">
+              <button
+                type="button"
+                className={`stat-card stat-card-lg stat-card--clickable ${dashboardSection === 'active' ? 'stat-card--selected' : ''}`}
+                onClick={() => {
+                  setDashboardSection('active')
+                  void loadActiveIncidents()
+                }}
+              >
                 <div className="stat-card-inner">
                   <span className="stat-card-icon" aria-hidden>
                     🚨
@@ -1368,8 +1550,15 @@ export default function App() {
                     <div className="value">{dash?.active_incidents ?? '—'}</div>
                   </div>
                 </div>
-              </div>
-              <div className="stat-card stat-card-lg">
+              </button>
+              <button
+                type="button"
+                className={`stat-card stat-card-lg stat-card--clickable ${dashboardSection === 'vehicles' ? 'stat-card--selected' : ''}`}
+                onClick={() => {
+                  setDashboardSection('vehicles')
+                  void loadVehiclesDashboard()
+                }}
+              >
                 <div className="stat-card-inner">
                   <span className="stat-card-icon" aria-hidden>
                     🚑
@@ -1379,8 +1568,15 @@ export default function App() {
                     <div className="value">{dash?.total_vehicles ?? '—'}</div>
                   </div>
                 </div>
-              </div>
-              <div className="stat-card stat-card-lg">
+              </button>
+              <button
+                type="button"
+                className={`stat-card stat-card-lg stat-card--clickable ${dashboardSection === 'corridors' ? 'stat-card--selected' : ''}`}
+                onClick={() => {
+                  setDashboardSection('corridors')
+                  void loadCorridors().catch((e: unknown) => reportApiErr(e))
+                }}
+              >
                 <div className="stat-card-inner">
                   <span className="stat-card-icon" aria-hidden>
                     🛣️
@@ -1390,8 +1586,23 @@ export default function App() {
                     <div className="value">{dash?.total_corridors ?? '—'}</div>
                   </div>
                 </div>
-              </div>
+              </button>
             </div>
+            <p className="dash-summary" role="status">
+              {dash ? (
+                <>
+                  <strong>{dash.active_incidents}</strong> active · <strong>{dash.dispatched_incidents}</strong> dispatched ·{' '}
+                  <strong>{dash.closed_today}</strong> closed today
+                </>
+              ) : (
+                '…'
+              )}
+            </p>
+            <p className="dash-section-hint">
+              <button type="button" className="link-btn" onClick={() => setDashboardSection('recent')}>
+                Show last 10 incidents
+              </button>
+            </p>
             <div className="dash-export-row">
               <button
                 type="button"
@@ -1409,18 +1620,85 @@ export default function App() {
                 {archiveStaleBusy ? 'Working…' : 'Clear test data'}
               </button>
             </div>
-            <div className="feed">
-              <h3>Last 10 incidents (click for detail)</h3>
-              <ul>
-                {recent.map((i) => (
-                  <li key={i.id} className={severityRowClass(i.severity)}>
-                    <button type="button" className="feed-row" onClick={() => void openIncidentDetail(i.id)}>
-                      <span className={severityClass(i.severity)}>{i.severity}</span> · {i.incident_type} · <strong>{i.corridor_name}</strong> · KM {i.km_marker ?? '—'} · {i.status} · {new Date(i.created_at).toLocaleString()}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            {dashboardSection === 'vehicles' ? (
+              <div className="feed feed--table">
+                <h3>All vehicles</h3>
+                <div className="table-wrap">
+                  <table className="veh-table">
+                    <thead>
+                      <tr>
+                        <th>Ambulance ID</th>
+                        <th>Driver</th>
+                        <th>Status</th>
+                        <th>Location (KM)</th>
+                        <th>Last updated</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {vehiclesDash.map((v) => (
+                        <tr key={v.id} className={vehicleStatusToneClass(v.status, v.is_available)}>
+                          <td>
+                            <strong>{v.label}</strong>
+                            <span className="muted small-block">{v.corridor_name}</span>
+                          </td>
+                          <td>{v.driver_name ?? '—'}</td>
+                          <td>
+                            <span className="veh-status-pill">{v.status}</span>
+                          </td>
+                          <td>{v.km_marker != null ? `KM ${v.km_marker.toFixed(1)}` : '—'}</td>
+                          <td>{new Date(v.updated_at).toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : dashboardSection === 'corridors' ? (
+              <div className="feed feed--table">
+                <h3>Corridor details</h3>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Code</th>
+                        <th>KM range</th>
+                        <th>Active</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {corridors.map((c) => (
+                        <tr key={c.id}>
+                          <td>{c.name}</td>
+                          <td>{c.code ?? '—'}</td>
+                          <td>
+                            {c.km_start != null && c.km_end != null ? `${c.km_start}–${c.km_end}` : '—'}
+                          </td>
+                          <td>{c.is_active ? 'Yes' : 'No'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="feed">
+                <h3>
+                  {dashboardSection === 'active' ? 'Active incidents' : 'Last 10 incidents'}{' '}
+                  <span className="feed-hint">(click a row for detail)</span>
+                </h3>
+                <ul>
+                  {(dashboardSection === 'active' ? activeIncidents : recent).map((i) => (
+                    <li key={i.id} className={incidentRowClass(i)}>
+                      <button type="button" className="feed-row" onClick={() => void openIncidentDetail(i.id)}>
+                        <span className={severityClass(i.severity)}>{i.severity}</span> · {i.incident_type} · <strong>{i.corridor_name}</strong> · KM {i.km_marker ?? '—'} · {i.status} ·{' '}
+                        {new Date(i.created_at).toLocaleString()}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <p className="hint" style={{ marginTop: '1rem', color: 'var(--muted)', fontSize: '0.85rem' }}>
               Health: <code>{API}/api/health</code> · Data via <code>{apiUrl('/admin/dashboard')}</code>
             </p>
@@ -1667,27 +1945,107 @@ export default function App() {
 
       {selectedIncident && (
         <div className="modal-backdrop" role="presentation" onClick={() => setSelectedIncident(null)}>
-          <section className="incident-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+          <section className="incident-modal incident-modal--wide" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <div className="incident-modal-header">
-              <h3>Incident Detail</h3>
-              <button type="button" onClick={() => setSelectedIncident(null)}>Close</button>
+              <h3 className="incident-modal-title">Incident</h3>
+              <button type="button" className="modal-close-x" aria-label="Close" onClick={() => setSelectedIncident(null)}>
+                ×
+              </button>
             </div>
-            {incidentLoading ? <p>Loading…</p> : (
+            {incidentLoading ? (
+              <p>Loading…</p>
+            ) : (
               <>
-                <dl className="kv">
-                  <dt>Type</dt><dd>{selectedIncident.incident_type}</dd>
-                  <dt>Severity</dt><dd>{selectedIncident.severity}</dd>
-                  <dt>Status</dt><dd>{selectedIncident.status}</dd>
-                  <dt>Trust</dt><dd>{trustLabel(selectedIncident.trust_score)}</dd>
-                  <dt>KM marker</dt><dd>{selectedIncident.km_marker ?? '—'}</dd>
-                  <dt>Report ID</dt><dd>{selectedIncident.public_report_id ?? '—'}</dd>
-                  <dt>Time reported</dt><dd>{new Date(selectedIncident.created_at).toLocaleString()}</dd>
-                  <dt>Assigned vehicle</dt><dd>{selectedIncident.assigned_vehicle_label ?? '—'}</dd>
-                </dl>
+                <div className="incident-modal-hero">
+                  <span className="incident-type-ico" aria-hidden>
+                    {incidentTypeEmoji(selectedIncident.incident_type)}
+                  </span>
+                  <div className="incident-badges">
+                    <span className={`pill pill-sev ${severityClass(selectedIncident.severity)}`}>{selectedIncident.severity}</span>
+                    <span className="pill pill-status">{selectedIncident.status}</span>
+                    <span className="pill pill-km">KM {selectedIncident.km_marker ?? '—'}</span>
+                  </div>
+                </div>
+                <IncidentMiniMap
+                  leafletReady={leafletReady}
+                  latitude={selectedIncident.latitude ?? null}
+                  longitude={selectedIncident.longitude ?? null}
+                />
+                <div className="incident-modal-grid">
+                  <div>
+                    <h4>Details</h4>
+                    <dl className="kv kv-tight">
+                      <dt>Reported at</dt>
+                      <dd>{new Date(selectedIncident.created_at).toLocaleString()}</dd>
+                      <dt>Reporter</dt>
+                      <dd>{selectedIncident.reporter_type ?? '—'}</dd>
+                      <dt>Injured</dt>
+                      <dd>{selectedIncident.injured_count ?? '—'}</dd>
+                      <dt>Hazards</dt>
+                      <dd>
+                        {Array.isArray(selectedIncident.sos_details?.hazards) && (selectedIncident.sos_details?.hazards as string[]).length
+                          ? (selectedIncident.sos_details?.hazards as string[]).map(hazardIdLabel).join(', ')
+                          : '—'}
+                      </dd>
+                      <dt>Direction</dt>
+                      <dd>{directionHuman(selectedIncident.sos_details?.direction)}</dd>
+                      <dt>Notes</dt>
+                      <dd>{selectedIncident.notes?.trim() || '—'}</dd>
+                      <dt>Report ID</dt>
+                      <dd>{selectedIncident.public_report_id ?? '—'}</dd>
+                    </dl>
+                  </div>
+                  <div>
+                    <h4>Assigned vehicle</h4>
+                    <dl className="kv kv-tight">
+                      <dt>Ambulance</dt>
+                      <dd>{selectedIncident.assigned_vehicle_label ?? '—'}</dd>
+                      <dt>Driver</dt>
+                      <dd>{selectedIncident.driver_name ?? '—'}</dd>
+                      <dt>ETA</dt>
+                      <dd>
+                        {selectedIncident.eta_minutes != null ? `${selectedIncident.eta_minutes} min (approx)` : '—'}
+                      </dd>
+                    </dl>
+                    <div className="trust-pill-wrap">
+                      <span className="trust-pill" title="Trust score">
+                        Trust {selectedIncident.trust_score}/100 — {trustLabel(selectedIncident.trust_score)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
                 <h4>Timeline</h4>
-                <ul className="vehicle-list">
+                <ul className="phase-timeline">
+                  {(() => {
+                    const ph = buildPhaseTimes(selectedIncident)
+                    return (
+                      <>
+                        <li>
+                          <span className="phase-label">Created</span>
+                          <span className="phase-time">{ph.created ? new Date(ph.created).toLocaleString() : '—'}</span>
+                        </li>
+                        <li>
+                          <span className="phase-label">Dispatched</span>
+                          <span className="phase-time">{ph.dispatched ? new Date(ph.dispatched).toLocaleString() : '—'}</span>
+                        </li>
+                        <li>
+                          <span className="phase-label">Arrived</span>
+                          <span className="phase-time">{ph.arrived ? new Date(ph.arrived).toLocaleString() : '—'}</span>
+                        </li>
+                        <li>
+                          <span className="phase-label">Cleared</span>
+                          <span className="phase-time">{ph.cleared ? new Date(ph.cleared).toLocaleString() : '—'}</span>
+                        </li>
+                      </>
+                    )
+                  })()}
+                </ul>
+                <h4 className="muted-heading">Raw events</h4>
+                <ul className="vehicle-list vehicle-list--compact">
                   {selectedIncident.timeline.map((ev) => (
-                    <li key={ev.id}><strong>{ev.event_type}</strong> · {new Date(ev.created_at).toLocaleString()}</li>
+                    <li key={ev.id}>
+                      <strong>{ev.event_type}</strong> · {new Date(ev.created_at).toLocaleString()}
+                    </li>
                   ))}
                 </ul>
               </>
