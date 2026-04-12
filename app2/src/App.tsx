@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { apiUrl } from './api'
+import {
+  CRASH_COUNTDOWN_SEC,
+  readCrashDetectionEnabled,
+  writeCrashDetectionEnabled,
+} from './crashDetection'
 import {
   enqueuePending,
   loadPending,
@@ -8,6 +13,7 @@ import {
   savePending,
   type PendingSosPayload,
 } from './sosOfflineQueue'
+import { useCrashDetection } from './useCrashDetection'
 import { useNetworkConnectivity } from './useNetworkConnectivity'
 
 const DEFAULT_CORRIDOR = String(import.meta.env.VITE_CORRIDOR_ID ?? '').trim()
@@ -173,7 +179,26 @@ export default function App() {
   const [deliveredBanner, setDeliveredBanner] = useState<string | null>(null)
   const [queueVersion, setQueueVersion] = useState(0)
 
+  const [crashDetectionEnabled, setCrashDetectionEnabled] = useState(() => readCrashDetectionEnabled())
+  const [crashModalOpen, setCrashModalOpen] = useState(false)
+  const [crashCountdown, setCrashCountdown] = useState(CRASH_COUNTDOWN_SEC)
+  const [crashBusy, setCrashBusy] = useState(false)
+  const crashAutoSentRef = useRef(false)
+  const crashSendingRef = useRef(false)
+
   const { isConnected } = useNetworkConnectivity()
+
+  const openCrashModal = useCallback(() => {
+    crashAutoSentRef.current = false
+    setCrashCountdown(CRASH_COUNTDOWN_SEC)
+    setCrashModalOpen(true)
+  }, [])
+
+  const { permissionUi, isListening, requestPermissionFromGesture } = useCrashDetection({
+    enabled: crashDetectionEnabled,
+    suspended: crashModalOpen,
+    onImpact: openCrashModal,
+  })
 
   const pendingCount = useMemo(() => {
     const now = Date.now()
@@ -404,6 +429,102 @@ export default function App() {
     }
   }
 
+  const sendAutoCrashSos = useCallback(async () => {
+    if (crashSendingRef.current) return
+    crashSendingRef.current = true
+    setCrashModalOpen(false)
+    setCrashBusy(true)
+    setError(null)
+    try {
+      const pos = await new Promise<GeolocationPosition | null>((resolve) => {
+        if (!navigator.geolocation) {
+          resolve(null)
+          return
+        }
+        navigator.geolocation.getCurrentPosition(
+          (p) => resolve(p),
+          () => resolve(null),
+          { enableHighAccuracy: true, timeout: 18_000, maximumAge: 0 },
+        )
+      })
+      const lat = pos?.coords.latitude
+      const lng = pos?.coords.longitude
+      const gpsOk = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
+
+      const { rows } = await fetchCorridorOptions()
+      const effectiveCorridor =
+        corridorFromUrl ||
+        DEFAULT_CORRIDOR ||
+        (rows.length === 1 ? rows[0].id : '') ||
+        rows[0]?.id ||
+        ''
+
+      if (!effectiveCorridor) {
+        setError('Could not determine highway for auto SOS. Enable location and try a manual report.')
+        setPhase('landing')
+        return
+      }
+
+      const payloadBody: PendingSosPayload = {
+        incident_type: 'accident',
+        severity: 'critical',
+        injured_count: 0,
+        notes: 'Auto-detected crash — no user response',
+        latitude: gpsOk ? lat : undefined,
+        longitude: gpsOk ? lng : undefined,
+      }
+
+      if (!isConnected) {
+        enqueuePending(effectiveCorridor, payloadBody)
+        setQueueVersion((v) => v + 1)
+        setPhase('offline_saved')
+        return
+      }
+
+      const r = await fetch(apiUrl(`/corridors/${effectiveCorridor}/incidents/public`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payloadBody),
+      })
+      if (!r.ok) {
+        const t = await r.text()
+        throw new Error(t || 'Could not send report')
+      }
+      const data = (await r.json()) as PublicResponse
+      setResult(data)
+      setPhase('done')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Auto SOS failed')
+      setPhase('landing')
+    } finally {
+      setCrashBusy(false)
+      crashSendingRef.current = false
+    }
+  }, [corridorFromUrl, isConnected])
+
+  useEffect(() => {
+    if (!crashModalOpen) return
+    if (crashCountdown <= 0) {
+      if (!crashAutoSentRef.current) {
+        crashAutoSentRef.current = true
+        void sendAutoCrashSos()
+      }
+      return
+    }
+    const t = window.setTimeout(() => setCrashCountdown((c) => c - 1), 1000)
+    return () => clearTimeout(t)
+  }, [crashModalOpen, crashCountdown, sendAutoCrashSos])
+
+  const cancelCrashModal = () => {
+    crashAutoSentRef.current = true
+    setCrashModalOpen(false)
+  }
+
+  const confirmSendCrashSosNow = () => {
+    crashAutoSentRef.current = true
+    void sendAutoCrashSos()
+  }
+
   const reportCode = result?.public_report_id ?? ''
   const showReachId = reportCode ? `REACH-${reportCode}` : ''
 
@@ -434,15 +555,52 @@ export default function App() {
       ) : null}
       {phase === 'landing' && (
         <div className="sos-landing">
+          {crashDetectionEnabled && permissionUi === 'needs_gesture' ? (
+            <div className="sos-motion-prompt">
+              <p className="sos-motion-prompt-text">Crash detection needs motion sensor access.</p>
+              <button type="button" className="sos-motion-prompt-btn" onClick={() => void requestPermissionFromGesture()}>
+                Enable motion sensors
+              </button>
+            </div>
+          ) : null}
           <button type="button" className="sos-mega" onClick={beginReport}>
             <span className="sos-mega-label">Emergency on highway?</span>
             <span className="sos-mega-action">Tap to report</span>
           </button>
+          <details className="sos-settings">
+            <summary className="sos-settings-summary">Settings</summary>
+            <label className="sos-settings-row">
+              <input
+                type="checkbox"
+                checked={crashDetectionEnabled}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  writeCrashDetectionEnabled(on)
+                  setCrashDetectionEnabled(on)
+                }}
+              />
+              <span>Crash detection (accelerometer)</span>
+            </label>
+            {permissionUi === 'denied' ? (
+              <p className="sos-settings-hint">Motion permission denied — enable it in browser settings to use crash detection.</p>
+            ) : null}
+            {permissionUi === 'unsupported' ? (
+              <p className="sos-settings-hint">Motion sensors not available in this browser.</p>
+            ) : null}
+          </details>
         </div>
       )}
 
       {phase === 'form' && (
         <form className="sos-form" onSubmit={submit}>
+          {crashDetectionEnabled && permissionUi === 'needs_gesture' ? (
+            <div className="sos-motion-prompt sos-motion-prompt--inline">
+              <p className="sos-motion-prompt-text">Enable motion sensors for crash detection.</p>
+              <button type="button" className="sos-motion-prompt-btn" onClick={() => void requestPermissionFromGesture()}>
+                Enable motion sensors
+              </button>
+            </div>
+          ) : null}
           <div className="sos-section">
             <h2 className="sos-heading">What happened?</h2>
             <div className="sos-chip-grid" role="group" aria-label="Incident type">
@@ -629,6 +787,21 @@ export default function App() {
               </span>
             ) : null}
           </button>
+          <details className="sos-settings sos-settings--form">
+            <summary className="sos-settings-summary">Settings</summary>
+            <label className="sos-settings-row">
+              <input
+                type="checkbox"
+                checked={crashDetectionEnabled}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  writeCrashDetectionEnabled(on)
+                  setCrashDetectionEnabled(on)
+                }}
+              />
+              <span>Crash detection (accelerometer)</span>
+            </label>
+          </details>
         </form>
       )}
 
@@ -656,6 +829,38 @@ export default function App() {
           <p className="sos-legal">False reporting is a criminal offence</p>
         </div>
       )}
+
+      {crashDetectionEnabled && permissionUi === 'granted' && isListening ? (
+        <div className="sos-crash-indicator" role="status">
+          Crash detection: ON
+        </div>
+      ) : null}
+
+      {crashModalOpen ? (
+        <div className="sos-crash-overlay" role="alertdialog" aria-modal="true" aria-labelledby="sos-crash-title">
+          <div className="sos-crash-card">
+            <h2 id="sos-crash-title" className="sos-crash-title">
+              🚨 Crash detected — are you OK?
+            </h2>
+            <p className="sos-crash-countdown">
+              Sending SOS in <strong>{crashCountdown}</strong>s if no response
+            </p>
+            <div className="sos-crash-actions">
+              <button type="button" className="sos-crash-btn sos-crash-btn--ok" disabled={crashBusy} onClick={cancelCrashModal}>
+                I&apos;M OK — Cancel
+              </button>
+              <button
+                type="button"
+                className="sos-crash-btn sos-crash-btn--sos"
+                disabled={crashBusy}
+                onClick={confirmSendCrashSosNow}
+              >
+                {crashBusy ? 'Sending…' : 'SEND SOS NOW'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

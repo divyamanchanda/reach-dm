@@ -638,3 +638,181 @@
   font-weight: 700;
   color: #fde047;
 }
+
+/* —— Crash detection —— */
+.sos-crash-indicator {
+  position: fixed;
+  bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 350;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(74, 222, 128, 0.45);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #bbf7d0;
+  pointer-events: none;
+}
+
+.sos-motion-prompt {
+  width: 100%;
+  max-width: 20rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(250, 204, 21, 0.5);
+  text-align: center;
+}
+
+.sos-motion-prompt--inline {
+  margin-bottom: 1.25rem;
+}
+
+.sos-motion-prompt-text {
+  margin: 0 0 0.65rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: #fef08a;
+  line-height: 1.35;
+}
+
+.sos-motion-prompt-btn {
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  border-radius: 10px;
+  border: 2px solid #fde047;
+  background: rgba(0, 0, 0, 0.25);
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 800;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sos-settings {
+  margin-top: 1.5rem;
+  width: 100%;
+  max-width: 20rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.88rem;
+}
+
+.sos-settings--form {
+  margin-top: 1rem;
+  max-width: none;
+}
+
+.sos-settings-summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: #fecaca;
+}
+
+.sos-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+  cursor: pointer;
+  font-weight: 600;
+  color: #fff8f8;
+}
+
+.sos-settings-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #9ca3af;
+}
+
+.sos-crash-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.88);
+  animation: sos-crash-fade 0.25s ease-out;
+}
+
+@keyframes sos-crash-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.sos-crash-card {
+  width: min(22rem, 100%);
+  padding: 1.35rem 1.15rem;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #450a0a 0%, #1a0505 100%);
+  border: 2px solid #ef4444;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  text-align: center;
+}
+
+.sos-crash-title {
+  margin: 0 0 0.85rem;
+  font-size: 1.25rem;
+  font-weight: 900;
+  line-height: 1.25;
+  color: #fecaca;
+}
+
+.sos-crash-countdown {
+  margin: 0 0 1.25rem;
+  font-size: 1.05rem;
+  color: #fde8e8;
+}
+
+.sos-crash-countdown strong {
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+  color: #fde047;
+}
+
+.sos-crash-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.sos-crash-btn {
+  min-height: 3rem;
+  border-radius: 12px;
+  border: none;
+  font-size: 1rem;
+  font-weight: 800;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.sos-crash-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sos-crash-btn--ok {
+  background: rgba(34, 197, 94, 0.25);
+  border: 2px solid #4ade80;
+  color: #bbf7d0;
+}
+
+.sos-crash-btn--sos {
+  background: linear-gradient(180deg, #ef4444, #b91c1c);
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
