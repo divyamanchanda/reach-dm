@@ -2,6 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import './App.css'
 import { API, patchJson, postJson, login, fetchJson, type User } from './api'
+import {
+  enqueuePendingAction,
+  loadCurrentSnapshot,
+  loadPendingActions,
+  loadRecentAssignments,
+  recordRecentAssignment,
+  removePendingAction,
+  saveCurrentSnapshot,
+  toDriverSnapshot,
+  type DriverSyncStep,
+} from './driverOfflineCache'
+import { useDriverNetwork } from './useDriverNetwork'
 
 type DriverStep = 'accept' | 'en_route' | 'arrived' | 'clear'
 
@@ -25,6 +37,7 @@ type IncidentDetail = {
   trust_score: number
   status: string
   created_at: string
+  notes: string | null
 }
 
 type HistoryRow = {
@@ -93,6 +106,55 @@ function googleMapsDirectionsUrl(lat: number, lng: number): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(d)}`
 }
 
+function isNetworkError(e: unknown): boolean {
+  if (e instanceof TypeError) return true
+  const m = e instanceof Error ? e.message : String(e)
+  return /failed to fetch|networkerror|load failed|network request failed|aborted|fetch/i.test(m)
+}
+
+function normalizeIncidentFromApi(raw: unknown): IncidentDetail | null {
+  if (!raw || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.id !== 'string') return null
+  const km = o.km_marker
+  const lat = o.latitude
+  const lng = o.longitude
+  return {
+    id: o.id,
+    corridor_id: String(o.corridor_id ?? ''),
+    incident_type: String(o.incident_type ?? ''),
+    severity: String(o.severity ?? ''),
+    km_marker: typeof km === 'number' && Number.isFinite(km) ? km : km != null ? Number(km) : null,
+    latitude: typeof lat === 'number' && Number.isFinite(lat) ? lat : lat != null ? Number(lat) : null,
+    longitude: typeof lng === 'number' && Number.isFinite(lng) ? lng : lng != null ? Number(lng) : null,
+    trust_score: typeof o.trust_score === 'number' ? o.trust_score : Number(o.trust_score) || 0,
+    status: String(o.status ?? ''),
+    created_at: String(o.created_at ?? ''),
+    notes: o.notes == null || o.notes === '' ? null : String(o.notes),
+  }
+}
+
+async function performDriverStepApi(
+  step: DriverSyncStep,
+  vehicleId: string,
+  incidentId: string,
+  token: string,
+): Promise<void> {
+  if (step === 'accept') {
+    await patchJson(`/vehicles/${vehicleId}/status`, token, { status: 'en_route' })
+    await patchJson(`/incidents/${incidentId}/status`, token, { status: 'accepted' })
+  } else if (step === 'en_route') {
+    await patchJson(`/vehicles/${vehicleId}/status`, token, { status: 'en_route' })
+    await patchJson(`/incidents/${incidentId}/status`, token, { status: 'en_route' })
+  } else if (step === 'arrived') {
+    await patchJson(`/vehicles/${vehicleId}/status`, token, { status: 'on_scene' })
+    await patchJson(`/incidents/${incidentId}/status`, token, { status: 'arrived' })
+  } else {
+    await patchJson(`/incidents/${incidentId}/status`, token, { status: 'closed' })
+    await patchJson(`/vehicles/${vehicleId}/status`, token, { status: 'available' })
+  }
+}
+
 export default function App() {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('reach3_token'))
   const [user, setUser] = useState<User | null>(() => {
@@ -118,7 +180,13 @@ export default function App() {
   const [gpsOk, setGpsOk] = useState(true)
   const [awaitingNextCall, setAwaitingNextCall] = useState(false)
   const [broadcastMessage, setBroadcastMessage] = useState<string | null>(null)
+  const [lastFetchFailed, setLastFetchFailed] = useState(false)
+  const [syncBanner, setSyncBanner] = useState<string | null>(null)
+  const [pendingVersion, setPendingVersion] = useState(0)
+  const [recentSnaps, setRecentSnaps] = useState<ReturnType<typeof loadRecentAssignments>>([])
   const hadLocationSuccess = useRef(false)
+
+  const { tier, isOffline } = useDriverNetwork(lastFetchFailed)
 
   useEffect(() => {
     if (incident) setAwaitingNextCall(false)
@@ -126,21 +194,51 @@ export default function App() {
 
   const loadIncidentFromServer = useCallback(async (): Promise<IncidentDetail | null> => {
     if (!token || !vehicle) return null
-    const rows = await fetchJson<IncidentDetail[]>(`/vehicles/${vehicle.id}/incidents`, token)
-    const top = rows[0] ?? null
-    if (!top) {
-      setIncident(null)
+    try {
+      const rows = await fetchJson<unknown[]>(`/vehicles/${vehicle.id}/incidents`, token)
+      setLastFetchFailed(false)
+      const raw = Array.isArray(rows) && rows[0] != null ? rows[0] : null
+      const top = raw ? normalizeIncidentFromApi(raw) : null
+      if (!top) {
+        setIncident(null)
+        setHoaxFullScreen(false)
+        saveCurrentSnapshot(vehicle.id, null)
+        return null
+      }
+      if (top.status === 'recalled') {
+        setIncident(null)
+        setHoaxFullScreen(true)
+        saveCurrentSnapshot(vehicle.id, null)
+        return null
+      }
       setHoaxFullScreen(false)
+      setIncident(top)
+      const snap = toDriverSnapshot(top)
+      saveCurrentSnapshot(vehicle.id, snap)
+      recordRecentAssignment(vehicle.id, snap)
+      setRecentSnaps(loadRecentAssignments(vehicle.id))
+      return top
+    } catch {
+      setLastFetchFailed(true)
+      const cached = loadCurrentSnapshot(vehicle.id)
+      if (cached) {
+        setIncident({
+          id: cached.id,
+          corridor_id: cached.corridor_id,
+          incident_type: cached.incident_type,
+          severity: cached.severity,
+          km_marker: cached.km_marker,
+          latitude: cached.latitude,
+          longitude: cached.longitude,
+          trust_score: cached.trust_score,
+          status: cached.status,
+          created_at: cached.created_at,
+          notes: cached.notes,
+        })
+        setHoaxFullScreen(false)
+      }
       return null
     }
-    if (top.status === 'recalled') {
-      setIncident(null)
-      setHoaxFullScreen(true)
-      return null
-    }
-    setHoaxFullScreen(false)
-    setIncident(top)
-    return top
   }, [token, vehicle])
 
   const refreshIncident = useCallback(async () => {
@@ -156,7 +254,9 @@ export default function App() {
     try {
       const rows = await fetchJson<HistoryRow[]>(`/vehicles/${vehicle.id}/incidents/history?limit=5`, token)
       setHistory(Array.isArray(rows) ? rows : [])
+      setLastFetchFailed(false)
     } catch {
+      setLastFetchFailed(true)
       setHistory([])
     }
   }, [token, vehicle])
@@ -197,6 +297,24 @@ export default function App() {
 
   useEffect(() => {
     if (!token || !vehicle) return
+    const snap = loadCurrentSnapshot(vehicle.id)
+    setRecentSnaps(loadRecentAssignments(vehicle.id))
+    if (snap) {
+      setIncident({
+        id: snap.id,
+        corridor_id: snap.corridor_id,
+        incident_type: snap.incident_type,
+        severity: snap.severity,
+        km_marker: snap.km_marker,
+        latitude: snap.latitude,
+        longitude: snap.longitude,
+        trust_score: snap.trust_score,
+        status: snap.status,
+        created_at: snap.created_at,
+        notes: snap.notes,
+      })
+      setHoaxFullScreen(false)
+    }
     void loadIncidentFromServer()
     void loadHistory()
     const id = window.setInterval(() => {
@@ -231,6 +349,45 @@ export default function App() {
       s.disconnect()
     }
   }, [token, vehicle, refreshIncident, loadHistory])
+
+  useEffect(() => {
+    const bump = () => setPendingVersion((v) => v + 1)
+    window.addEventListener('online', bump)
+    return () => window.removeEventListener('online', bump)
+  }, [])
+
+  useEffect(() => {
+    if (!token || !vehicle || isOffline) return
+    const pending = loadPendingActions(vehicle.id)
+    if (pending.length === 0) return
+    let cancelled = false
+    ;(async () => {
+      const list = [...pending]
+      let synced = 0
+      for (const p of list) {
+        if (cancelled) return
+        try {
+          await performDriverStepApi(p.step, vehicle.id, p.incidentId, token)
+          removePendingAction(vehicle.id, p.id)
+          synced += 1
+        } catch (e) {
+          if (isNetworkError(e)) break
+          removePendingAction(vehicle.id, p.id)
+        }
+      }
+      if (synced > 0) {
+        setSyncBanner('✅ Status synced')
+        setPendingVersion((v) => v + 1)
+        window.setTimeout(() => setSyncBanner(null), 8000)
+        await loadIncidentFromServer()
+        await loadHistory()
+        setRecentSnaps(loadRecentAssignments(vehicle.id))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [token, vehicle, isOffline, pendingVersion, loadIncidentFromServer, loadHistory])
 
   useEffect(() => {
     if (!token || !vehicle?.id) return
@@ -306,7 +463,7 @@ export default function App() {
   }
 
   const cannotRespond = async () => {
-    if (!token || !vehicle || !incident || busy) return
+    if (!token || !vehicle || !incident || busy || isOffline) return
     setBusy(true)
     setActionError(null)
     try {
@@ -322,6 +479,7 @@ export default function App() {
 
   const runStep = async (step: DriverStep) => {
     if (!token || !vehicle || !incident || busy) return
+    if (isOffline && (step === 'arrived' || step === 'clear')) return
     setBusy(true)
     setActionError(null)
     const vid = vehicle.id
@@ -333,20 +491,8 @@ export default function App() {
     setVehicle({ ...vehicle, status: vehicleStatusAfterStep(step) })
 
     try {
-      if (step === 'accept') {
-        await patchJson(`/vehicles/${vid}/status`, token, { status: 'en_route' })
-        await patchJson(`/incidents/${iid}/status`, token, { status: 'accepted' })
-      } else if (step === 'en_route') {
-        await patchJson(`/vehicles/${vid}/status`, token, { status: 'en_route' })
-        await patchJson(`/incidents/${iid}/status`, token, { status: 'en_route' })
-      } else if (step === 'arrived') {
-        await patchJson(`/vehicles/${vid}/status`, token, { status: 'on_scene' })
-        await patchJson(`/incidents/${iid}/status`, token, { status: 'arrived' })
-      } else {
-        await patchJson(`/incidents/${iid}/status`, token, { status: 'closed' })
-        await patchJson(`/vehicles/${vid}/status`, token, { status: 'available' })
-        setAwaitingNextCall(true)
-      }
+      await performDriverStepApi(step, vid, iid, token)
+      if (step === 'clear') setAwaitingNextCall(true)
       try {
         await loadIncidentFromServer()
         await loadHistory()
@@ -355,9 +501,25 @@ export default function App() {
         setActionError(`Saved. Reload issue: ${reMsg}`)
       }
     } catch (e: unknown) {
-      setIncident(prevIncident)
-      setVehicle(prevVehicle)
-      setActionError(e instanceof Error ? e.message : String(e))
+      if (isNetworkError(e)) {
+        enqueuePendingAction(vehicle.id, { vehicleId: vehicle.id, incidentId: iid, step })
+        setPendingVersion((v) => v + 1)
+        setActionError('Will sync when signal returns')
+        if (step === 'clear') setAwaitingNextCall(true)
+        const snap = toDriverSnapshot({
+          ...incident,
+          status: incidentStatusAfterStep(step),
+          notes: incident.notes,
+        })
+        saveCurrentSnapshot(vehicle.id, snap)
+        recordRecentAssignment(vehicle.id, snap)
+        setRecentSnaps(loadRecentAssignments(vehicle.id))
+      } else {
+        setIncident(prevIncident)
+        setVehicle(prevVehicle)
+        if (step === 'clear') setAwaitingNextCall(false)
+        setActionError(e instanceof Error ? e.message : String(e))
+      }
     } finally {
       setBusy(false)
     }
@@ -419,6 +581,26 @@ export default function App() {
   const canNavigate =
     incident != null && incident.latitude != null && incident.longitude != null && Number.isFinite(incident.latitude) && Number.isFinite(incident.longitude)
 
+  const kmForOfflineMsg =
+    incident?.km_marker != null && Number.isFinite(Number(incident.km_marker)) ? String(incident.km_marker) : '—'
+
+  const historyRows: HistoryRow[] =
+    history.length > 0
+      ? history
+      : recentSnaps.map((s) => ({
+          id: s.id,
+          incident_type: s.incident_type,
+          status: s.status,
+          created_at: s.created_at,
+        }))
+
+  const netBannerText =
+    tier === 'connected'
+      ? '🟢 Connected'
+      : tier === 'weak'
+        ? '🟠 Weak signal — cached data shown'
+        : '🔴 Offline — last assignment cached'
+
   return (
     <div className="drv-app">
       {broadcastMessage ? (
@@ -429,6 +611,16 @@ export default function App() {
           </button>
         </div>
       ) : null}
+
+      {syncBanner ? (
+        <div className="drv-sync-toast" role="status">
+          {syncBanner}
+        </div>
+      ) : null}
+
+      <div className={`drv-net-banner drv-net-banner--${tier}`} role="status" aria-live="polite">
+        {netBannerText}
+      </div>
 
       <header className="drv-topbar">
         <div className="drv-topbar-main">
@@ -450,6 +642,11 @@ export default function App() {
             </h2>
             {incident ? (
               <div className="drv-assignment">
+                {isOffline ? (
+                  <p className="drv-offline-banner" role="alert">
+                    📵 No signal — showing last known assignment. Navigate to KM {kmForOfflineMsg}
+                  </p>
+                ) : null}
                 <p className="drv-incident-type">{incident.incident_type}</p>
                 <div className="drv-meta-row">
                   <span className="drv-km-label">KM</span>
@@ -460,6 +657,12 @@ export default function App() {
                 >
                   {incident.severity}
                 </p>
+                {incident.notes ? (
+                  <p className="drv-notes">
+                    <span className="drv-notes-label">Notes</span>
+                    {incident.notes}
+                  </p>
+                ) : null}
 
                 {canNavigate ? (
                   <button type="button" className="drv-btn drv-btn-navigate drv-btn-block" onClick={openNavigate}>
@@ -471,17 +674,25 @@ export default function App() {
 
                 {nextStep ? (
                   <div className="drv-actions">
+                    {isOffline && (nextStep === 'arrived' || nextStep === 'clear') ? (
+                      <p className="drv-offline-sync-hint">Will sync when signal returns</p>
+                    ) : null}
                     <button
                       type="button"
                       className={`drv-btn drv-btn-block drv-btn-step drv-step-${nextStep}`}
                       data-step={nextStep}
-                      disabled={busy}
+                      disabled={busy || (isOffline && (nextStep === 'arrived' || nextStep === 'clear'))}
                       onClick={() => void runStep(nextStep)}
                     >
                       {primaryActionLabel(nextStep)}
                     </button>
                     {nextStep === 'accept' ? (
-                      <button type="button" className="drv-btn drv-btn-block drv-btn-decline" disabled={busy} onClick={() => void cannotRespond()}>
+                      <button
+                        type="button"
+                        className="drv-btn drv-btn-block drv-btn-decline"
+                        disabled={busy || isOffline}
+                        onClick={() => void cannotRespond()}
+                      >
                         CANNOT RESPOND
                       </button>
                     ) : null}
@@ -510,7 +721,7 @@ export default function App() {
             <h2 id="hist-heading" className="drv-section-title">
               Incident history
             </h2>
-            {history.length === 0 ? (
+            {historyRows.length === 0 ? (
               <p className="drv-subdued">No history yet.</p>
             ) : (
               <div className="drv-table-wrap">
@@ -523,7 +734,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {history.map((h) => (
+                    {historyRows.map((h) => (
                       <tr key={h.id}>
                         <td>{h.incident_type}</td>
                         <td>{new Date(h.created_at).toLocaleString()}</td>
