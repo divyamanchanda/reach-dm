@@ -612,13 +612,20 @@ export default function App() {
             type="submit"
             className="sos-submit"
             disabled={busy || locState === 'pending'}
+            aria-describedby={pendingCount > 0 ? 'sos-pending-reports-badge' : undefined}
           >
             <span className="sos-submit-label">
               {busy ? 'Sending…' : locState === 'pending' ? 'Getting location…' : 'Submit emergency report'}
             </span>
             {pendingCount > 0 ? (
-              <span className="sos-submit-pending-badge" title={`${pendingCount} report(s) waiting to send`}>
-                {pendingCount} pending
+              <span
+                id="sos-pending-reports-badge"
+                className="sos-submit-pending-badge"
+                role="status"
+                title={`${pendingCount} report(s) queued — will send when online`}
+              >
+                <span className="sos-submit-pending-reports">Pending reports</span>
+                <span className="sos-submit-pending-num">{pendingCount}</span>
               </span>
             ) : null}
           </button>

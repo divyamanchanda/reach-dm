@@ -499,14 +499,34 @@
 
 .sos-submit-pending-badge {
   flex: 0 0 auto;
-  padding: 0.2rem 0.55rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem 0.25rem 0.55rem;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.35);
   border: 1px solid rgba(255, 255, 255, 0.35);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 800;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
   line-height: 1.2;
+  color: #fef9c3;
+}
+
+.sos-submit-pending-reports {
+  text-transform: uppercase;
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  opacity: 0.95;
+}
+
+.sos-submit-pending-num {
+  min-width: 1.35rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
   color: #fef08a;
 }
 
