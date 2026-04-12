@@ -54,7 +54,7 @@ def corridor_stats(
     active = db.execute(
         select(func.count()).select_from(Incident).where(
             Incident.corridor_id == corridor_id,
-            Incident.status.notin_(["closed", "cancelled", "recalled"]),
+            Incident.status.notin_(["closed", "cancelled", "recalled", "archived"]),
         )
     ).scalar_one()
     pending = db.execute(
@@ -99,7 +99,7 @@ def list_incidents(
     q = (
         select(Incident, Incident.lat.label("lat"), Incident.lng.label("lng"))
         .where(Incident.corridor_id == corridor_id)
-        .where(Incident.status.notin_(["closed", "cancelled"]))
+            .where(Incident.status.notin_(["closed", "cancelled", "archived"]))
     )
     rows = db.execute(q).all()
     items: list[IncidentListItem] = []
@@ -116,6 +116,7 @@ def list_incidents(
                 longitude=float(lng) if lng is not None else None,
                 trust_score=inc.trust_score,
                 trust_recommendation=inc.trust_recommendation,
+                trust_factors=list(inc.trust_factors or []),
                 status=inc.status,
                 reporter_type=inc.reporter_type,
                 injured_count=inc.injured_count,

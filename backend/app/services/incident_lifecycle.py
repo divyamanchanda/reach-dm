@@ -96,7 +96,7 @@ def driver_decline_incident(db: Session, user: User, incident_id: uuid.UUID) -> 
     inc = db.get(Incident, incident_id)
     if not inc:
         raise ValueError("Incident not found")
-    if inc.status in ("closed", "cancelled", "recalled", "expired"):
+    if inc.status in ("closed", "cancelled", "recalled", "expired", "archived"):
         raise ValueError("Incident is not active")
 
     db.execute(
@@ -127,7 +127,7 @@ def driver_decline_incident(db: Session, user: User, incident_id: uuid.UUID) -> 
 def incident_eligible_for_operator_reassign(db: Session, incident_id: uuid.UUID) -> bool:
     """True if dispatch timed out without accept, or a driver declined."""
     inc = db.get(Incident, incident_id)
-    if not inc or inc.status in ("closed", "cancelled", "recalled", "expired"):
+    if not inc or inc.status in ("closed", "cancelled", "recalled", "expired", "archived"):
         return False
 
     if inc.status == "open":

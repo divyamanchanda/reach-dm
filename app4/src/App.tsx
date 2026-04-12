@@ -178,6 +178,13 @@ function severityClass(sev: string): string {
   return 'sev-minor'
 }
 
+function severityRowClass(sev: string): string {
+  const s = sev.toLowerCase()
+  if (s === 'critical') return 'feed-row-sev-critical'
+  if (s === 'major') return 'feed-row-sev-major'
+  return 'feed-row-sev-minor'
+}
+
 function incidentDotColor(sev: string): string {
   const s = sev.toLowerCase()
   if (s === 'critical') return '#dc2626'
@@ -666,6 +673,42 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
           Horizontal KM {0}–{NH48_KM_LENGTH} · Incidents &amp; vehicles from <code>/admin/live-map</code>
         </span>
       </div>
+      <div className="highway-legend" aria-label="Schematic legend">
+        <div className="highway-legend-block">
+          <span className="highway-legend-title">Incident dots</span>
+          <ul className="highway-legend-items">
+            <li>
+              <span className="hw-leg-dot" style={{ background: '#dc2626' }} aria-hidden />
+              Critical severity
+            </li>
+            <li>
+              <span className="hw-leg-dot" style={{ background: '#ea580c' }} aria-hidden />
+              Major severity
+            </li>
+            <li>
+              <span className="hw-leg-dot" style={{ background: '#16a34a' }} aria-hidden />
+              Minor severity
+            </li>
+          </ul>
+        </div>
+        <div className="highway-legend-block">
+          <span className="highway-legend-title">Ambulance markers</span>
+          <ul className="highway-legend-items">
+            <li>
+              <span className="hw-leg-dot" style={{ background: '#22c55e' }} aria-hidden />
+              Idle / available
+            </li>
+            <li>
+              <span className="hw-leg-dot" style={{ background: '#f97316' }} aria-hidden />
+              Dispatched or en route
+            </li>
+            <li>
+              <span className="hw-leg-dot" style={{ background: '#ef4444' }} aria-hidden />
+              On scene
+            </li>
+          </ul>
+        </div>
+      </div>
       <svg
         className="highway-svg highway-svg-live"
         viewBox={`0 0 ${HW_DIAGRAM.w} ${diagramH}`}
@@ -800,7 +843,6 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
             className="hw-amb-foreign"
           >
             <div
-              xmlns="http://www.w3.org/1999/xhtml"
               className="hw-amb-popup"
               onClick={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
@@ -868,6 +910,8 @@ export default function App() {
   const [corridors, setCorridors] = useState<CorridorRow[]>([])
   const [orgs, setOrgs] = useState<Organisation[]>([])
   const [pageErr, setPageErr] = useState<string | null>(null)
+  const [archiveStaleBusy, setArchiveStaleBusy] = useState(false)
+  const [archiveStaleInfo, setArchiveStaleInfo] = useState<string | null>(null)
   const [selectedIncident, setSelectedIncident] = useState<IncidentDetail | null>(null)
   const [incidentLoading, setIncidentLoading] = useState(false)
 
@@ -916,6 +960,7 @@ export default function App() {
 
   useEffect(() => {
     setPageErr(null)
+    setArchiveStaleInfo(null)
   }, [tab])
 
   const loadDashboard = useCallback(async () => {
@@ -1019,6 +1064,30 @@ export default function App() {
     localStorage.removeItem('reach_user')
     setToken(null)
     setUser(null)
+  }
+
+  const archiveStaleTestData = async () => {
+    if (!token) return
+    if (
+      !confirm(
+        'Archive test data? Incidents older than 24 hours will be marked archived. Active dispatches (dispatched / en route / on scene) are not changed.',
+      )
+    ) {
+      return
+    }
+    setArchiveStaleBusy(true)
+    setArchiveStaleInfo(null)
+    setPageErr(null)
+    try {
+      const r = await postJson<{ updated: number }>('/admin/incidents/archive-stale', token, {})
+      setArchiveStaleInfo(`Archived ${r.updated} incident(s).`)
+      await loadDashboard()
+      if (tab === 'map') await loadMap()
+    } catch (err: unknown) {
+      reportApiErr(err, 'Archive failed')
+    } finally {
+      setArchiveStaleBusy(false)
+    }
   }
 
   const addUser = async (e: FormEvent) => {
@@ -1276,11 +1345,52 @@ export default function App() {
           <>
             <h2>Dashboard</h2>
             {pageErr && <p className="err">{pageErr}</p>}
+            {archiveStaleInfo && <p className="info-banner">{archiveStaleInfo}</p>}
             <div className="grid-stats">
-              <div className="stat-card"><div className="label">API health</div><div className={`value ${apiOk ? 'ok' : 'bad'}`}>{apiOk === null ? '…' : apiOk ? 'Up' : 'Down'}</div></div>
-              <div className="stat-card"><div className="label">Active incidents</div><div className="value">{dash?.active_incidents ?? '—'}</div></div>
-              <div className="stat-card"><div className="label">Vehicles</div><div className="value">{dash?.total_vehicles ?? '—'}</div></div>
-              <div className="stat-card"><div className="label">Corridors</div><div className="value">{dash?.total_corridors ?? '—'}</div></div>
+              <div className="stat-card stat-card-lg">
+                <div className="stat-card-inner">
+                  <span className="stat-card-icon" aria-hidden>
+                    🟢
+                  </span>
+                  <div>
+                    <div className="label">API health</div>
+                    <div className={`value ${apiOk === true ? 'ok' : apiOk === false ? 'bad' : ''}`}>{apiOk === null ? '…' : apiOk ? 'Up' : 'Down'}</div>
+                  </div>
+                </div>
+              </div>
+              <div className="stat-card stat-card-lg">
+                <div className="stat-card-inner">
+                  <span className="stat-card-icon" aria-hidden>
+                    🚨
+                  </span>
+                  <div>
+                    <div className="label">Active incidents</div>
+                    <div className="value">{dash?.active_incidents ?? '—'}</div>
+                  </div>
+                </div>
+              </div>
+              <div className="stat-card stat-card-lg">
+                <div className="stat-card-inner">
+                  <span className="stat-card-icon" aria-hidden>
+                    🚑
+                  </span>
+                  <div>
+                    <div className="label">Vehicles</div>
+                    <div className="value">{dash?.total_vehicles ?? '—'}</div>
+                  </div>
+                </div>
+              </div>
+              <div className="stat-card stat-card-lg">
+                <div className="stat-card-inner">
+                  <span className="stat-card-icon" aria-hidden>
+                    🛣️
+                  </span>
+                  <div>
+                    <div className="label">Corridors</div>
+                    <div className="value">{dash?.total_corridors ?? '—'}</div>
+                  </div>
+                </div>
+              </div>
             </div>
             <div className="dash-export-row">
               <button
@@ -1295,12 +1405,15 @@ export default function App() {
               >
                 Export last 100 incidents (CSV)
               </button>
+              <button type="button" className="btn-clear-test" disabled={archiveStaleBusy} onClick={() => void archiveStaleTestData()}>
+                {archiveStaleBusy ? 'Working…' : 'Clear test data'}
+              </button>
             </div>
             <div className="feed">
               <h3>Last 10 incidents (click for detail)</h3>
               <ul>
                 {recent.map((i) => (
-                  <li key={i.id}>
+                  <li key={i.id} className={severityRowClass(i.severity)}>
                     <button type="button" className="feed-row" onClick={() => void openIncidentDetail(i.id)}>
                       <span className={severityClass(i.severity)}>{i.severity}</span> · {i.incident_type} · <strong>{i.corridor_name}</strong> · KM {i.km_marker ?? '—'} · {i.status} · {new Date(i.created_at).toLocaleString()}
                     </button>

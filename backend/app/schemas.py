@@ -65,6 +65,7 @@ class IncidentListItem(BaseModel):
     longitude: float | None
     trust_score: int
     trust_recommendation: str | None
+    trust_factors: list = Field(default_factory=list)
     status: str
     reporter_type: str
     injured_count: int
@@ -197,6 +198,12 @@ class AdminDashboardOut(BaseModel):
     active_incidents: int
     total_vehicles: int
     total_corridors: int
+
+
+class AdminArchiveStaleOut(BaseModel):
+    """Bulk archive for admin test-data cleanup."""
+
+    updated: int
 
 
 class AdminRecentIncidentItem(BaseModel):

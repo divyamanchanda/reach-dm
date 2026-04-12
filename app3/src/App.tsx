@@ -20,6 +20,8 @@ type IncidentDetail = {
   incident_type: string
   severity: string
   km_marker: number | null
+  latitude: number | null
+  longitude: number | null
   trust_score: number
   status: string
   created_at: string
@@ -35,7 +37,7 @@ type HistoryRow = {
 function currentStepForStatus(status: string | undefined | null): DriverStep | null {
   if (status == null || String(status).trim() === '') return null
   const s = String(status).toLowerCase()
-  if (s === 'closed' || s === 'cancelled' || s === 'recalled') return null
+  if (s === 'closed' || s === 'cancelled' || s === 'recalled' || s === 'archived') return null
   if (s === 'accepted') return 'en_route'
   if (s === 'en_route') return 'arrived'
   if (s === 'arrived' || s === 'on_scene') return 'clear'
@@ -71,11 +73,24 @@ function vehicleStatusAfterStep(step: DriverStep): string {
   }
 }
 
-const STEP_LABEL: Record<DriverStep, string> = {
-  accept: 'ACCEPT',
-  en_route: 'EN ROUTE',
-  arrived: 'ARRIVED',
-  clear: 'CLEAR',
+function primaryActionLabel(step: DriverStep): string {
+  switch (step) {
+    case 'accept':
+      return 'ACCEPT'
+    case 'en_route':
+      return 'EN ROUTE'
+    case 'arrived':
+      return "I'VE ARRIVED"
+    case 'clear':
+      return 'INCIDENT CLEARED'
+    default:
+      return 'CONTINUE'
+  }
+}
+
+function googleMapsDirectionsUrl(lat: number, lng: number): string {
+  const d = `${lat},${lng}`
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(d)}`
 }
 
 export default function App() {
@@ -139,7 +154,7 @@ export default function App() {
   const loadHistory = useCallback(async () => {
     if (!token || !vehicle) return
     try {
-      const rows = await fetchJson<HistoryRow[]>(`/vehicles/${vehicle.id}/incidents/history?limit=10`, token)
+      const rows = await fetchJson<HistoryRow[]>(`/vehicles/${vehicle.id}/incidents/history?limit=5`, token)
       setHistory(Array.isArray(rows) ? rows : [])
     } catch {
       setHistory([])
@@ -290,6 +305,21 @@ export default function App() {
     void loadHistory()
   }
 
+  const cannotRespond = async () => {
+    if (!token || !vehicle || !incident || busy) return
+    setBusy(true)
+    setActionError(null)
+    try {
+      await postJson(`/incidents/${incident.id}/decline`, token, {})
+      await loadIncidentFromServer()
+      await loadHistory()
+    } catch (e: unknown) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const runStep = async (step: DriverStep) => {
     if (!token || !vehicle || !incident || busy) return
     setBusy(true)
@@ -333,12 +363,17 @@ export default function App() {
     }
   }
 
+  const openNavigate = () => {
+    if (!incident?.latitude || incident?.longitude == null) return
+    window.open(googleMapsDirectionsUrl(incident.latitude, incident.longitude), '_blank', 'noopener,noreferrer')
+  }
+
   if (hoaxFullScreen) {
     return (
-      <div className="sun-standdown" role="alert">
-        <div className="sun-standdown-inner">
-          <p className="sun-standdown-title">STAND DOWN — HOAX REPORTED. Return to base.</p>
-          <button type="button" className="sun-standdown-btn" onClick={dismissHoax}>
+      <div className="drv-standdown" role="alert">
+        <div className="drv-standdown-inner">
+          <p className="drv-standdown-title">STAND DOWN — HOAX REPORTED. Return to base.</p>
+          <button type="button" className="drv-btn drv-btn-standdown" onClick={dismissHoax}>
             Acknowledge
           </button>
         </div>
@@ -348,31 +383,31 @@ export default function App() {
 
   if (!token || !user) {
     return (
-      <div className="sun-app sun-login">
-        <h1 className="sun-h1">REACH Driver</h1>
-        <form className="sun-form" onSubmit={(e) => void submitLogin(e)}>
-          <label className="sun-label">
+      <div className="drv-app drv-login">
+        <h1 className="drv-h1">REACH Driver</h1>
+        <form className="drv-form" onSubmit={(e) => void submitLogin(e)}>
+          <label className="drv-label">
             Phone
             <input
-              className="sun-input"
+              className="drv-input"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               autoComplete="username"
               inputMode="tel"
             />
           </label>
-          <label className="sun-label">
+          <label className="drv-label">
             Password
             <input
-              className="sun-input"
+              className="drv-input"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
             />
           </label>
-          {loginError && <p className="sun-err">{loginError}</p>}
-          <button type="submit" className="sun-btn sun-btn-login">
+          {loginError && <p className="drv-err">{loginError}</p>}
+          <button type="submit" className="drv-btn drv-btn-primary drv-btn-block">
             LOGIN
           </button>
         </form>
@@ -381,107 +416,132 @@ export default function App() {
   }
 
   const nextStep = incident ? currentStepForStatus(incident.status) : null
+  const canNavigate =
+    incident != null && incident.latitude != null && incident.longitude != null && Number.isFinite(incident.latitude) && Number.isFinite(incident.longitude)
 
   return (
-    <div className="sun-app">
+    <div className="drv-app">
       {broadcastMessage ? (
-        <div className="sun-broadcast" role="status">
-          <p className="sun-broadcast-text">{broadcastMessage}</p>
-          <button type="button" className="sun-broadcast-dismiss" onClick={() => setBroadcastMessage(null)}>
+        <div className="drv-broadcast" role="status">
+          <p className="drv-broadcast-text">{broadcastMessage}</p>
+          <button type="button" className="drv-btn drv-btn-broadcast-dismiss" onClick={() => setBroadcastMessage(null)}>
             Dismiss
           </button>
         </div>
       ) : null}
-      <div className={`sun-gps ${gpsOk ? 'sun-gps-on' : 'sun-gps-lost'}`} role="status">
-        {gpsOk ? 'GPS ON' : 'GPS LOST'}
-      </div>
 
-      <header className="sun-header">
-        <p className="sun-driver">{driverLine}</p>
-        {vehicle && <p className="sun-vehicle">{vehicle.label}</p>}
+      <header className="drv-topbar">
+        <div className="drv-topbar-main">
+          <p className="drv-name">{driverLine}</p>
+          {vehicle && <p className="drv-ambulance-id">{vehicle.label}</p>}
+        </div>
+        <div className={`drv-gps-pill ${gpsOk ? 'drv-gps-on' : 'drv-gps-off'}`} role="status" aria-live="polite">
+          {gpsOk ? 'GPS ON' : 'GPS OFF'}
+        </div>
       </header>
 
-      {vehicleLoadError && <p className="sun-banner-warn">{vehicleLoadError}</p>}
+      {vehicleLoadError && <p className="drv-banner-warn">{vehicleLoadError}</p>}
 
       {vehicle && !vehicleLoadError && (
-        <main className="sun-main">
-          <section className="sun-section" aria-labelledby="assign-heading">
-            <h2 id="assign-heading" className="sun-section-title">
-              CURRENT ASSIGNMENT
+        <main className="drv-main">
+          <section className="drv-section" aria-labelledby="assign-heading">
+            <h2 id="assign-heading" className="drv-section-title">
+              Current assignment
             </h2>
             {incident ? (
-              <>
-                <p className="sun-type">{incident.incident_type.toUpperCase()}</p>
+              <div className="drv-assignment">
+                <p className="drv-incident-type">{incident.incident_type}</p>
+                <div className="drv-meta-row">
+                  <span className="drv-km-label">KM</span>
+                  <span className="drv-km-value">{incident.km_marker ?? '—'}</span>
+                </div>
                 <p
-                  className={`sun-sev sun-sev-${['critical', 'major', 'minor'].includes(incident.severity.toLowerCase()) ? incident.severity.toLowerCase() : 'major'}`}
+                  className={`drv-sev drv-sev-${['critical', 'major', 'minor'].includes(incident.severity.toLowerCase()) ? incident.severity.toLowerCase() : 'major'}`}
                 >
-                  {incident.severity.toUpperCase()}
+                  {incident.severity}
                 </p>
-                <p className="sun-km">
-                  KM <strong>{incident.km_marker ?? '—'}</strong>
-                </p>
+
+                {canNavigate ? (
+                  <button type="button" className="drv-btn drv-btn-navigate drv-btn-block" onClick={openNavigate}>
+                    NAVIGATE
+                  </button>
+                ) : (
+                  <p className="drv-nav-hint">No map coordinates for this incident — use KM marker.</p>
+                )}
+
                 {nextStep ? (
-                  <div className="sun-actions-row">
+                  <div className="drv-actions">
                     <button
                       type="button"
-                      className="sun-action"
+                      className={`drv-btn drv-btn-block drv-btn-step drv-step-${nextStep}`}
                       data-step={nextStep}
                       disabled={busy}
                       onClick={() => void runStep(nextStep)}
                     >
-                      {STEP_LABEL[nextStep]}
+                      {primaryActionLabel(nextStep)}
                     </button>
                     {nextStep === 'accept' ? (
-                      <button
-                        type="button"
-                        className="sun-action sun-action-decline"
-                        disabled={busy}
-                        onClick={() => void cannotRespond()}
-                      >
+                      <button type="button" className="drv-btn drv-btn-block drv-btn-decline" disabled={busy} onClick={() => void cannotRespond()}>
                         CANNOT RESPOND
                       </button>
                     ) : null}
                   </div>
                 ) : (
-                  <p className="sun-cleared">Incident cleared.</p>
+                  <p className="drv-subdued">Incident cleared.</p>
                 )}
-                {actionError && <p className="sun-err">{actionError}</p>}
-              </>
+                {actionError && <p className="drv-err">{actionError}</p>}
+              </div>
             ) : awaitingNextCall ? (
-              <div className="sun-next-call">
-                <p className="sun-cleared">Last call cleared.</p>
-                <button type="button" className="sun-ready-next" onClick={acknowledgeReadyForNextCall}>
+              <div className="drv-cleared-block">
+                <p className="drv-subdued">Last call cleared.</p>
+                <button type="button" className="drv-btn drv-btn-primary drv-btn-block" onClick={acknowledgeReadyForNextCall}>
                   READY FOR NEXT CALL
                 </button>
               </div>
             ) : (
-              <p className="sun-standby">STANDING BY</p>
+              <div className="drv-standby" aria-live="polite">
+                <span className="drv-pulse-dot" aria-hidden />
+                <p className="drv-standby-text">Standby — Ready for next call</p>
+              </div>
             )}
           </section>
 
-          <section className="sun-section sun-history" aria-labelledby="hist-heading">
-            <h2 id="hist-heading" className="sun-section-title">
-              INCIDENT HISTORY
+          <section className="drv-section drv-history" aria-labelledby="hist-heading">
+            <h2 id="hist-heading" className="drv-section-title">
+              Incident history
             </h2>
             {history.length === 0 ? (
-              <p className="sun-hist-empty">No history yet.</p>
+              <p className="drv-subdued">No history yet.</p>
             ) : (
-              <ul className="sun-hist-list">
-                {history.map((h) => (
-                  <li key={h.id} className="sun-hist-row">
-                    <span className="sun-hist-type">{h.incident_type}</span>
-                    <span className="sun-hist-date">{new Date(h.created_at).toLocaleString()}</span>
-                    <span className="sun-hist-st">{h.status}</span>
-                  </li>
-                ))}
-              </ul>
+              <div className="drv-table-wrap">
+                <table className="drv-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Type</th>
+                      <th scope="col">Date</th>
+                      <th scope="col">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((h) => (
+                      <tr key={h.id}>
+                        <td>{h.incident_type}</td>
+                        <td>{new Date(h.created_at).toLocaleString()}</td>
+                        <td>
+                          <span className="drv-status-pill">{h.status}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
         </main>
       )}
 
-      <footer className="sun-footer">
-        <button type="button" className="sun-logout" onClick={logout}>
+      <footer className="drv-footer">
+        <button type="button" className="drv-btn drv-btn-ghost drv-btn-block" onClick={logout}>
           Log out
         </button>
       </footer>

@@ -84,7 +84,11 @@ function IncidentHeatmap({ buckets }: { buckets: { segment_start_km: number; inc
   )
 }
 
-function ResponseTrendChart({ points }: { points: { reported_at: string; response_minutes: number }[] }) {
+function ResponseTrendChart({
+  points,
+}: {
+  points: { incident_id: string; reported_at: string; response_minutes: number }[]
+}) {
   const sorted = useMemo(
     () => [...points].sort((a, b) => +new Date(a.reported_at) - +new Date(b.reported_at)),
     [points],

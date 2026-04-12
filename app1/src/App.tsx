@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CircleMarker, MapContainer, Popup, TileLayer, useMap } from 'react-leaflet'
+import { CircleMarker, MapContainer, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet'
 import { io, Socket } from 'socket.io-client'
 import './App.css'
 import { API, apiUrl, fetchJson, login, patchJson, postJson, type User } from './api'
@@ -32,6 +32,7 @@ type Incident = {
   longitude: number | null
   trust_score: number
   trust_recommendation: string | null
+  trust_factors?: unknown[] | null
   status: string
   reporter_type: string
   injured_count: number
@@ -132,7 +133,7 @@ function severityRank(sev: string): number {
 
 /** Expired / closed — keep at end of the list. */
 function isExpiredOrClosedStatus(status: string): boolean {
-  return status === 'expired' || status === 'closed'
+  return status === 'expired' || status === 'closed' || status === 'archived'
 }
 
 /** Active first; then expired/closed. Within each bucket: severity, then newest first. */
@@ -149,17 +150,19 @@ function sortIncidentsByPriority(items: Incident[]): Incident[] {
 
 const AVG_CORRIDOR_KMH = 80
 
+/** NH48 Bengaluru → Chennai corridor length used for KM interpolation and vehicle ETA projection. */
+const NH48_TOTAL_KM = 312
+
 function kmFromLatLng(lat: number, lng: number): number {
   const bengaluru = { lat: 12.9716, lng: 77.5946 }
   const chennai = { lat: 13.0827, lng: 80.2707 }
-  const nh48Km = 312
   const dx = chennai.lng - bengaluru.lng
   const dy = chennai.lat - bengaluru.lat
   const px = lng - bengaluru.lng
   const py = lat - bengaluru.lat
   const denom = dx * dx + dy * dy
   const t = denom > 0 ? Math.max(0, Math.min(1, (px * dx + py * dy) / denom)) : 0
-  return t * nh48Km
+  return t * NH48_TOTAL_KM
 }
 
 function etaMinutesFromKmGap(kmA: number, kmB: number): number {
@@ -168,6 +171,13 @@ function etaMinutesFromKmGap(kmA: number, kmB: number): number {
 
 function formatShortTime(d: Date): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+function nearestAmbulanceOneLine(v: NearbyVehicle): string {
+  const km = v.distance_meters / 1000
+  const kmStr = km < 10 ? km.toFixed(1) : km.toFixed(0)
+  const eta = v.eta_minutes != null ? `~${Math.round(v.eta_minutes)} min away` : 'ETA —'
+  return `${v.label} · ${kmStr} km · ${eta}`
 }
 
 type TimelineStep = { key: string; label: string; at: Date | null; done: boolean }
@@ -254,29 +264,96 @@ function statusLabel(status: string): string {
   return status
 }
 
-function trustBand(score: number): { label: string; className: 'trust-low' | 'trust-mid' | 'trust-high' } {
-  if (score <= 30) return { label: 'Unverified', className: 'trust-low' }
-  if (score <= 60) return { label: 'Partially verified', className: 'trust-mid' }
-  return { label: 'High confidence', className: 'trust-high' }
+function reporterCountFromTrustFactors(factors: unknown): number {
+  if (!Array.isArray(factors)) return 1
+  for (const raw of factors) {
+    if (raw && typeof raw === 'object' && 'factor' in raw) {
+      const f = raw as { factor?: string; count?: number }
+      if (f.factor === 'multiple_reports' && typeof f.count === 'number') return Math.max(1, f.count)
+    }
+  }
+  return 1
 }
 
-/** Single display derived from `trust_score` — use everywhere verification status is shown. */
-function trustVerificationFromScore(score: number): {
+function hasAiVerifiedFactor(factors: unknown): boolean {
+  if (!Array.isArray(factors)) return false
+  return factors.some((raw) => {
+    if (!raw || typeof raw !== 'object' || !('factor' in raw)) return false
+    return (raw as { factor?: string }).factor === 'ai_verified'
+  })
+}
+
+function hasIncidentGps(lat: number | null, lng: number | null): boolean {
+  return lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
+}
+
+type DispatchTrustTier = 'verified' | 'likely' | 'unverified'
+
+function deriveDispatchTrustDisplay(input: {
+  status: string
+  trust_factors: unknown
+  latitude: number | null
+  longitude: number | null
+}): {
+  tier: DispatchTrustTier
   emoji: string
   label: string
-  className: 'trust-low' | 'trust-mid' | 'trust-high'
+  reporterCount: number
+  className: string
 } {
-  const band = trustBand(score)
-  const emoji =
-    band.className === 'trust-low' ? '🔴' : band.className === 'trust-mid' ? '🟡' : '🟢'
-  return { emoji, label: band.label, className: band.className }
+  const reporters = reporterCountFromTrustFactors(input.trust_factors)
+  const ai = hasAiVerifiedFactor(input.trust_factors)
+  const gps = hasIncidentGps(input.latitude, input.longitude)
+  const operatorConfirmed = input.status === 'confirmed_real'
+
+  if (operatorConfirmed || reporters >= 3) {
+    return {
+      tier: 'verified',
+      emoji: '🟢',
+      label: 'Verified',
+      reporterCount: reporters,
+      className: 'dispatch-trust-badge--verified',
+    }
+  }
+  if (ai || gps || reporters >= 2) {
+    return {
+      tier: 'likely',
+      emoji: '🟡',
+      label: 'Likely Real',
+      reporterCount: reporters,
+      className: 'dispatch-trust-badge--likely',
+    }
+  }
+  return {
+    tier: 'unverified',
+    emoji: '🔴',
+    label: 'Unverified',
+    reporterCount: reporters,
+    className: 'dispatch-trust-badge--unverified',
+  }
 }
 
-function TrustVerificationLabel({ score }: { score: number }) {
-  const v = trustVerificationFromScore(score)
+function DispatchTrustBadge({
+  incident,
+  detail,
+}: {
+  incident: Incident
+  detail?: IncidentDetail | null
+}) {
+  const src = detail?.id === incident.id ? detail : incident
+  const factors = detail?.id === incident.id ? (detail.trust_factors ?? []) : (incident.trust_factors ?? [])
+  const lat = src.latitude ?? incident.latitude
+  const lng = src.longitude ?? incident.longitude
+  const d = deriveDispatchTrustDisplay({
+    status: src.status,
+    trust_factors: factors,
+    latitude: lat,
+    longitude: lng,
+  })
+  const reportsText = `${d.reporterCount} ${d.reporterCount === 1 ? 'report' : 'reports'}`
   return (
-    <span className={`trust-label ${v.className}`}>
-      {v.emoji} {v.label}
+    <span className={`dispatch-trust-badge ${d.className}`}>
+      {d.emoji} {d.label} · {reportsText}
     </span>
   )
 }
@@ -344,11 +421,9 @@ function humanizeDispatchFailure(e: unknown): { line: string; hint: string } {
 }
 
 function estimatePointFromKm(km: number): { lat: number; lng: number } {
-  // Matches NH48 Bengaluru -> Chennai interpolation used elsewhere in App4.
   const bengaluru = { lat: 12.9716, lng: 77.5946 }
   const chennai = { lat: 13.0827, lng: 80.2707 }
-  const nh48Km = 312
-  const t = Math.min(1, Math.max(0, km / nh48Km))
+  const t = Math.min(1, Math.max(0, km / NH48_TOTAL_KM))
   return {
     lat: bengaluru.lat + (chennai.lat - bengaluru.lat) * t,
     lng: bengaluru.lng + (chennai.lng - bengaluru.lng) * t,
@@ -699,11 +774,18 @@ function App() {
     setDispatchingByIncidentId((prev) => ({ ...prev, [incident.id]: true }))
     setError(null)
     setErrorHint(null)
+    setIncidents((prev) =>
+      prev.map((row) => (row.id === incident.id ? { ...row, status: 'confirmed_real' } : row)),
+    )
+    setIncidentDetail((d) =>
+      d && d.id === incident.id ? { ...d, status: 'confirmed_real' } : d,
+    )
     try {
       await patchJson(`/incidents/${incident.id}/status`, token, { status: 'confirmed_real' })
       if (corridorId) await refreshLists(corridorId, token)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed confirming incident')
+      if (corridorId && token) await refreshLists(corridorId, token).catch(() => {})
     } finally {
       setDispatchingByIncidentId((prev) => ({ ...prev, [incident.id]: false }))
     }
@@ -858,9 +940,10 @@ function App() {
                   </span>
                 </div>
               </div>
-              <div className="meta">
-                KM {i.km_marker ?? '—'} · <TrustVerificationLabel score={i.trust_score} />
+              <div className="meta inc-card-trust-line">
+                <DispatchTrustBadge incident={i} detail={selectedId === i.id ? incidentDetail : null} />
               </div>
+              <div className="meta">KM {i.km_marker ?? '—'}</div>
               <div className="meta">
                 Report {(i.public_report_id ?? i.id).slice(0, 8)} · {relativeReportedTime(i.created_at)}
               </div>
@@ -1018,129 +1101,161 @@ function App() {
           })}
         </aside>
 
-        <section className="map-panel">
-          <h3>Map</h3>
-          <p className="hint">Live location map for selected incident.</p>
-          {selected && (
-            <div className="map-placeholder">
-              {(() => {
-                const lat = incidentDetail?.latitude ?? selected.latitude
-                const lng = incidentDetail?.longitude ?? selected.longitude
-                const km = selected.km_marker
-                const hasLatLng = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
-                const estimated = !hasLatLng && km != null && Number.isFinite(km) ? estimatePointFromKm(km) : null
-                const finalLat = hasLatLng ? lat : estimated?.lat ?? null
-                const finalLng = hasLatLng ? lng : estimated?.lng ?? null
-
-                if (finalLat == null || finalLng == null) {
-                  return (
-                    <>
-                      <div>Lat —</div>
-                      <div>Lng —</div>
-                    </>
-                  )
-                }
-                return (
-                  <>
-                    <MapContainer
-                      className="leaflet-map"
-                      center={[finalLat, finalLng]}
-                      zoom={13}
-                      scrollWheelZoom
-                    >
-                      <TileLayer
-                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                      />
-                      <CircleMarker
-                        center={[finalLat, finalLng]}
-                        radius={10}
-                        pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.7 }}
-                      >
-                        <Popup>{selected.incident_type}</Popup>
-                      </CircleMarker>
-                      <RecenterMap latitude={finalLat} longitude={finalLng} />
-                    </MapContainer>
-                    <div>Lat {finalLat}</div>
-                    <div>Lng {finalLng}</div>
-                    <a
-                      className="link"
-                      href={`https://www.openstreetmap.org/?mlat=${finalLat}&mlon=${finalLng}#map=14/${finalLat}/${finalLng}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open in OSM
-                    </a>
-                  </>
-                )
-              })()}
-            </div>
-          )}
-        </section>
-
         <aside className="detail">
-          {!selected && <p>Select an incident.</p>}
+          {!selected && <p className="detail-empty-prompt">Select an incident.</p>}
           {selected && (
-            <>
-              <div className="detail-panel-header">
-                <h3>Incident detail</h3>
-                <button
-                  type="button"
-                  className="detail-panel-close"
-                  aria-label="Close and clear selection"
-                  title="Close"
-                  onClick={() => {
-                    setSelectedId(null)
-                    setExpandedTimelineId(null)
-                    setIsDetailOpen(false)
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-              <dl className="kv">
-                <dt>Type</dt>
-                <dd>{selected.incident_type}</dd>
-                <dt>Severity</dt>
-                <dd>{selected.severity}</dd>
-                <dt>KM</dt>
-                <dd>{selected.km_marker ?? '—'}</dd>
-                <dt>Trust</dt>
-                <dd>
-                  <TrustVerificationLabel
-                    score={
-                      incidentDetail?.id === selected.id ? incidentDetail.trust_score : selected.trust_score
-                    }
-                  />
-                </dd>
-                <dt>Reporter</dt>
-                <dd>{selected.reporter_type}</dd>
-                <dt>Status</dt>
-                <dd>{statusLabel(selected.status)}</dd>
-                <dt>Injured</dt>
-                <dd>{incidentDetail?.injured_count ?? selected.injured_count}</dd>
-                {incidentDetail?.public_report_id && (
-                  <>
-                    <dt>Public report ID</dt>
-                    <dd>{incidentDetail.public_report_id}</dd>
-                  </>
-                )}
-                <dt>Notes</dt>
-                <dd className="notes-dd">
-                  {incidentDetail?.notes?.trim()
-                    ? incidentDetail.notes
-                    : '—'}
-                </dd>
-              </dl>
+            <div className="detail-panel-inner">
+              <button
+                type="button"
+                className="detail-panel-close"
+                aria-label="Close and clear selection"
+                title="Close"
+                onClick={() => {
+                  setSelectedId(null)
+                  setExpandedTimelineId(null)
+                  setIsDetailOpen(false)
+                }}
+              >
+                ×
+              </button>
 
-              {incidentDetail && incidentDetail.timeline.length > 0 && (
-                <div className="timeline">
-                  <h4>Recent timeline</h4>
-                  <ul>
-                    {incidentDetail.timeline.slice(-5).map((ev) => (
-                      <li key={ev.id}>
-                        <span className="tl-type">{ev.event_type}</span>
-                        <time>{new Date(ev.created_at).toLocaleString()}</time>
+              <header className="detail-hero">
+                <div className="detail-hero-km">
+                  <span className="detail-hero-km-label">KM</span>
+                  <span className="detail-hero-km-num">{selected.km_marker ?? '—'}</span>
+                </div>
+                <h2 className="detail-hero-type">{selected.incident_type}</h2>
+                <div className="detail-hero-badges">
+                  <DispatchTrustBadge incident={selected} detail={incidentDetail?.id === selected.id ? incidentDetail : null} />
+                  <span className="pill detail-severity-pill" style={{ background: severityColor[selected.severity] ?? '#64748b' }}>
+                    {selected.severity}
+                  </span>
+                  <span className="detail-status-pill">{statusLabel(selected.status)}</span>
+                </div>
+              </header>
+
+              <div className="detail-map-block">
+                <h3 className="detail-section-title">Location</h3>
+                <div className="map-placeholder detail-map-placeholder">
+                  {(() => {
+                    const lat = incidentDetail?.latitude ?? selected.latitude
+                    const lng = incidentDetail?.longitude ?? selected.longitude
+                    const km = selected.km_marker
+                    const hasGps =
+                      lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
+                    const kmNum = km != null && Number.isFinite(km) ? Number(km) : null
+                    const fromKm =
+                      !hasGps && kmNum != null ? estimatePointFromKm(kmNum) : null
+                    const isEstimated = Boolean(fromKm)
+                    const finalLat = hasGps ? lat! : fromKm?.lat ?? null
+                    const finalLng = hasGps ? lng! : fromKm?.lng ?? null
+
+                    if (finalLat == null || finalLng == null) {
+                      return <p className="detail-map-fallback">No map position — add GPS or a KM marker along NH48.</p>
+                    }
+
+                    const markerColor = isEstimated ? '#f59e0b' : '#ef4444'
+                    const tooltipText = isEstimated
+                      ? `~KM ${kmNum} (estimated)`
+                      : `GPS${kmNum != null ? ` · KM ${kmNum}` : ''}`
+
+                    return (
+                      <>
+                        <p className="detail-map-source">
+                          {isEstimated
+                            ? `Approximate position on NH48 from KM marker (no GPS). Axis: Bengaluru–Chennai, ${NH48_TOTAL_KM} km.`
+                            : 'Showing reported GPS coordinates on the map.'}
+                        </p>
+                        <MapContainer
+                          className="leaflet-map detail-leaflet-map"
+                          center={[finalLat, finalLng]}
+                          zoom={13}
+                          scrollWheelZoom
+                        >
+                          <TileLayer
+                            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                          />
+                          <CircleMarker
+                            center={[finalLat, finalLng]}
+                            radius={10}
+                            pathOptions={{
+                              color: markerColor,
+                              fillColor: markerColor,
+                              fillOpacity: 0.75,
+                            }}
+                          >
+                            <Tooltip
+                              permanent
+                              direction="top"
+                              offset={[0, -6]}
+                              opacity={1}
+                              className="dispatch-map-tooltip"
+                            >
+                              {tooltipText}
+                            </Tooltip>
+                            <Popup>
+                              {isEstimated ? (
+                                <>
+                                  ~KM {kmNum} (estimated)
+                                  <br />
+                                  <span className="map-popup-sub">NH48 Bengaluru → Chennai</span>
+                                </>
+                              ) : (
+                                <>
+                                  {selected.incident_type}
+                                  <br />
+                                  <span className="map-popup-sub">GPS location</span>
+                                </>
+                              )}
+                            </Popup>
+                          </CircleMarker>
+                          <RecenterMap latitude={finalLat} longitude={finalLng} />
+                        </MapContainer>
+                        <a
+                          className="link detail-osm-link"
+                          href={`https://www.openstreetmap.org/?mlat=${finalLat}&mlon=${finalLng}#map=14/${finalLat}/${finalLng}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Open in OpenStreetMap
+                        </a>
+                      </>
+                    )
+                  })()}
+                </div>
+              </div>
+
+              <div className="detail-meta-two-col">
+                <div className="detail-meta-col">
+                  <div className="detail-meta-label">Reported by</div>
+                  <div className="detail-meta-value detail-meta-reporter">{selected.reporter_type}</div>
+                  <div className="detail-meta-time">{new Date(selected.created_at).toLocaleString()}</div>
+                  <div className="detail-meta-relative">{relativeReportedTime(selected.created_at)}</div>
+                </div>
+                <div className="detail-meta-col">
+                  <div className="detail-meta-label">Injured</div>
+                  <div className="detail-meta-injured">{incidentDetail?.injured_count ?? selected.injured_count}</div>
+                  <div className="detail-meta-label detail-meta-notes-label">Notes</div>
+                  <div className="detail-meta-notes">
+                    {incidentDetail?.notes?.trim() ? incidentDetail.notes : '—'}
+                  </div>
+                </div>
+              </div>
+
+              {incidentDetail && incidentDetail.id === selected.id && (
+                <div className="detail-timeline-compact">
+                  <h3 className="detail-section-title">Timeline</h3>
+                  <ul className="detail-timeline-steps">
+                    {buildIncidentTimelineSteps(incidentDetail).map((step) => (
+                      <li key={step.key} className="detail-timeline-step">
+                        <span
+                          className={`timeline-dot ${step.done ? 'timeline-dot--done' : 'timeline-dot--pending'}`}
+                          aria-hidden
+                        />
+                        <span className="detail-timeline-time">
+                          {step.at ? formatShortTime(step.at) : '—'}
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -1151,21 +1266,13 @@ function App() {
                 const statusForUi =
                   incidentDetail?.id === selected.id ? incidentDetail.status : selected.status
                 if (isExpiredOrClosedStatus(statusForUi)) return null
+                const first = nearby[0]
+                if (!first) return null
                 return (
-                  <>
-                    <h4>Nearest ambulances</h4>
-                    <ul className="vehicle-list">
-                      {nearby.map((v) => (
-                        <li key={v.vehicle_id}>
-                          {v.label} — {Math.round(v.distance_meters)} m
-                          {v.eta_minutes != null ? ` · ~${v.eta_minutes} min` : ''}
-                          <span className={`eta-badge ${v.eta_source === 'route' ? 'route' : 'fallback'}`}>
-                            {v.eta_source === 'route' ? 'ETA: route' : 'ETA: fallback'}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
+                  <div className="detail-nearest-amb">
+                    <h3 className="detail-section-title">Nearest ambulance</h3>
+                    <p className="detail-ambulance-line">{nearestAmbulanceOneLine(first)}</p>
+                  </div>
                 )
               })()}
               {isIncidentExpiredByAge(selected.created_at) || selected.status === 'expired' ? (
@@ -1233,7 +1340,7 @@ function App() {
                   {errorHint ? <span className="err-hint-hint"> (hover for details)</span> : null}
                 </p>
               )}
-            </>
+            </div>
           )}
         </aside>
 
@@ -1312,20 +1419,6 @@ function App() {
               <dd>{incidentDetail?.km_marker ?? selected.km_marker ?? '—'}</dd>
               <dt>Injured count</dt>
               <dd>{incidentDetail?.injured_count ?? selected.injured_count}</dd>
-              <dt>Trust</dt>
-              <dd>
-                <TrustVerificationLabel
-                  score={
-                    incidentDetail?.id === selected.id ? incidentDetail.trust_score : selected.trust_score
-                  }
-                />
-              </dd>
-              <dt>Latitude</dt>
-              <dd>{incidentDetail?.latitude ?? selected.latitude ?? '—'}</dd>
-              <dt>Longitude</dt>
-              <dd>{incidentDetail?.longitude ?? selected.longitude ?? '—'}</dd>
-              <dt>Public report ID</dt>
-              <dd>{incidentDetail?.public_report_id ?? '—'}</dd>
               <dt>Created</dt>
               <dd>{new Date(selected.created_at).toLocaleString()}</dd>
               <dt>Updated</dt>

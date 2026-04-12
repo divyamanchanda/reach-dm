@@ -64,6 +64,8 @@ def compute_trust_public_sos(
     # Note: public_sos_no_gps path already reflects low GPS trust; deduction matches brief "No GPS location −15".
 
     score = _clamp(score)
+    if score >= 45:
+        factors.append({"factor": "ai_verified", "note": "Automated assessment: likely real"})
     return TrustResult(score=score, recommendation=recommendation_for_score(score), factors=factors)
 
 

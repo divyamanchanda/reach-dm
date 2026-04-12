@@ -109,7 +109,7 @@ def list_vehicle_dispatched_incidents(
             SELECT i.id
             FROM incidents i
             INNER JOIN dispatches d ON d.incident_id = i.id AND d.vehicle_id = :vid
-            WHERE i.status NOT IN ('closed', 'cancelled')
+            WHERE i.status NOT IN ('closed', 'cancelled', 'archived')
             ORDER BY d.created_at DESC
             LIMIT 10
             """

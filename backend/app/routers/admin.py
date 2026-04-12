@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import delete, func, or_, select, text
@@ -23,6 +23,7 @@ from app.models import (
 )
 from app.schemas import (
     AdminAnalyticsOut,
+    AdminArchiveStaleOut,
     AdminCorridorCreateBody,
     AdminDashboardOut,
     AdminIncidentDetailOut,
@@ -68,7 +69,7 @@ def admin_dashboard(
 ):
     active = db.execute(
         select(func.count()).select_from(Incident).where(
-            Incident.status.notin_(["closed", "cancelled", "recalled"]),
+            Incident.status.notin_(["closed", "cancelled", "recalled", "archived"]),
         )
     ).scalar_one()
     v_count = db.execute(select(func.count()).select_from(Vehicle)).scalar_one()
@@ -78,6 +79,34 @@ def admin_dashboard(
         total_vehicles=int(v_count),
         total_corridors=int(c_count),
     )
+
+
+@router.post("/incidents/archive-stale", response_model=AdminArchiveStaleOut)
+def admin_archive_stale_incidents(
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+    older_than_hours: int = Query(24, ge=1, le=8760),
+):
+    """Mark incidents older than `older_than_hours` as archived (test-data cleanup).
+
+    Skips rows already archived and incidents currently in active response
+    (dispatched / en_route / on_scene) so live dispatches are not torn down.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+    r = db.execute(
+        text(
+            """
+            UPDATE incidents
+            SET status = 'archived', updated_at = now()
+            WHERE created_at < :cutoff
+              AND status != 'archived'
+              AND status NOT IN ('dispatched', 'en_route', 'on_scene')
+            """
+        ),
+        {"cutoff": cutoff},
+    )
+    db.commit()
+    return AdminArchiveStaleOut(updated=int(r.rowcount or 0))
 
 
 @router.get("/incidents/recent", response_model=list[AdminRecentIncidentItem])
@@ -279,7 +308,7 @@ def admin_live_map(
         qi = (
             select(Incident, Incident.lat.label("lat"), Incident.lng.label("lng"))
             .where(Incident.corridor_id == c.id)
-            .where(Incident.status.notin_(["closed", "cancelled"]))
+            .where(Incident.status.notin_(["closed", "cancelled", "archived"]))
         )
         incidents: list[LiveMapIncidentOut] = []
         for inc, la, ln in db.execute(qi).all():
