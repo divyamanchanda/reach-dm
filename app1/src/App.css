@@ -250,7 +250,10 @@ button:disabled {
   border-color: #dc2626 !important;
 }
 
+/* >10 min undispatched: light red fill + keep pulsing red border */
 .inc-card--urgent-crit {
+  animation: inc-pulse-border 1.2s ease-in-out infinite;
+  border-color: #dc2626 !important;
   background: #fef2f2;
   color: #1e293b;
 }

@@ -393,12 +393,13 @@ function App() {
   const [savingNotesForId, setSavingNotesForId] = useState<string | null>(null)
   /** Re-render periodically: NEW badges, and client-side 2h expiry vs created_at. */
   const [_newBadgeTick, setNewBadgeTick] = useState(0)
-  const [, setAgeTick] = useState(0)
+  /** Bumps every 30s so undispatched urgency (5/10 min) re-evaluates from `created_at`. */
+  const [ageTick, setAgeTick] = useState(0)
   useEffect(() => {
     const id = window.setInterval(() => {
       setNewBadgeTick((n) => n + 1)
       setAgeTick((n) => n + 1)
-    }, 60_000)
+    }, 30_000)
     return () => window.clearInterval(id)
   }, [])
 
@@ -798,6 +799,7 @@ function App() {
           <h3>Live incidents</h3>
           {sortedIncidents.map((i) => {
             void etaTick
+            void ageTick
             return (
             <div
               key={i.id}
