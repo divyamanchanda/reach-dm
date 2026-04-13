@@ -796,18 +796,21 @@ async def admin_broadcast(
     msg = body.message.strip()
     if not msg:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is empty")
-    row = BroadcastMessage(message=msg, created_by=user.id)
+    row = BroadcastMessage(message=msg, created_by=user.id, priority=body.priority)
     db.add(row)
     db.commit()
     db.refresh(row)
     created = row.created_at
     if created.tzinfo is None:
         created = created.replace(tzinfo=timezone.utc)
+    sender = (user.full_name or user.phone or "Dispatch Control").strip() or "Dispatch Control"
     await emit_driver_broadcast(
         {
             "message": row.message,
             "id": str(row.id),
             "created_at": created.isoformat(),
+            "sender_name": sender,
+            "priority": row.priority,
         }
     )
     return {"ok": True, "id": str(row.id)}

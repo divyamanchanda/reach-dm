@@ -345,6 +345,10 @@ class AdminVehicleDashboardOut(BaseModel):
 
 class BroadcastBody(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
+    priority: Literal["urgent", "info"] | None = Field(
+        default=None,
+        description="Optional priority for driver notification (urgent vs info).",
+    )
 
 
 class AnalyticsResponsePointOut(BaseModel):

@@ -437,6 +437,7 @@ export function BroadcastPage({
   onError: (msg: string | null) => void
 }) {
   const [msg, setMsg] = useState('')
+  const [priority, setPriority] = useState<'urgent' | 'info' | ''>('')
   const [sending, setSending] = useState(false)
   const submit = async (e: FormEvent) => {
     e.preventDefault()
@@ -444,7 +445,10 @@ export function BroadcastPage({
     setSending(true)
     onError(null)
     try {
-      await postJson('/admin/broadcast', token, { message: msg.trim() })
+      await postJson('/admin/broadcast', token, {
+        message: msg.trim(),
+        priority: priority === '' ? null : priority,
+      })
       setMsg('')
     } catch (err: unknown) {
       if (isSessionExpiredError(err)) return
@@ -456,7 +460,10 @@ export function BroadcastPage({
   return (
     <div className="broadcast-page">
       <h2>Broadcast</h2>
-      <p className="muted intro">Send a message to all connected driver apps (Socket.IO). Drivers see a blue banner.</p>
+      <p className="muted intro">
+        Send a message to all connected driver apps (Socket.IO). Drivers get a dispatch notification panel with sender and time;
+        optional priority (🔴 Urgent / 🟡 Info).
+      </p>
       <form className="form-panel broadcast-form" onSubmit={(e) => void submit(e)}>
         <label>
           Message
@@ -467,6 +474,14 @@ export function BroadcastPage({
             placeholder="Type announcement for all drivers…"
             required
           />
+        </label>
+        <label>
+          Priority (optional)
+          <select value={priority} onChange={(e) => setPriority(e.target.value as 'urgent' | 'info' | '')}>
+            <option value="">None</option>
+            <option value="urgent">🔴 Urgent</option>
+            <option value="info">🟡 Info</option>
+          </select>
         </label>
         <button type="submit" disabled={sending || !msg.trim()}>
           {sending ? 'Sending…' : 'Send to All Drivers'}

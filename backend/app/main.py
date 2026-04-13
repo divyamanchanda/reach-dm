@@ -80,5 +80,6 @@ def ensure_coordinate_columns() -> None:
                 """
             )
         )
+        conn.execute(text("ALTER TABLE broadcast_messages ADD COLUMN IF NOT EXISTS priority TEXT"))
 
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app, socketio_path="socket.io")

@@ -14,6 +14,14 @@ import {
   type DriverSyncStep,
 } from './driverOfflineCache'
 import { useDriverNetwork } from './useDriverNetwork'
+import {
+  clearBroadcastLog,
+  loadBroadcastLog,
+  mergeBroadcastIntoLog,
+  parseBroadcastPayload,
+  playDriverBroadcastAlert,
+  type DriverBroadcastPayload,
+} from './broadcastUtils'
 
 type DriverStep = 'accept' | 'en_route' | 'arrived' | 'clear'
 
@@ -55,6 +63,11 @@ function currentStepForStatus(status: string | undefined | null): DriverStep | n
   if (s === 'en_route') return 'arrived'
   if (s === 'arrived' || s === 'on_scene') return 'clear'
   return 'accept'
+}
+
+function hasActiveDriverAssignment(inc: IncidentDetail | null): boolean {
+  if (!inc) return false
+  return currentStepForStatus(inc.status) != null
 }
 
 function incidentStatusAfterStep(step: DriverStep): string {
@@ -179,18 +192,32 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [gpsOk, setGpsOk] = useState(true)
   const [awaitingNextCall, setAwaitingNextCall] = useState(false)
-  const [broadcastMessage, setBroadcastMessage] = useState<string | null>(null)
+  const [broadcastPanel, setBroadcastPanel] = useState<DriverBroadcastPayload | null>(null)
+  const [broadcastHistory, setBroadcastHistory] = useState<DriverBroadcastPayload[]>([])
   const [lastFetchFailed, setLastFetchFailed] = useState(false)
   const [syncBanner, setSyncBanner] = useState<string | null>(null)
   const [pendingVersion, setPendingVersion] = useState(0)
   const [recentSnaps, setRecentSnaps] = useState<ReturnType<typeof loadRecentAssignments>>([])
   const hadLocationSuccess = useRef(false)
+  const incidentRef = useRef<IncidentDetail | null>(null)
 
   const { tier, isOffline } = useDriverNetwork(lastFetchFailed)
 
   useEffect(() => {
+    incidentRef.current = incident
+  }, [incident])
+
+  useEffect(() => {
     if (incident) setAwaitingNextCall(false)
   }, [incident])
+
+  useEffect(() => {
+    if (!user?.id) {
+      setBroadcastHistory([])
+      return
+    }
+    setBroadcastHistory(loadBroadcastLog(user.id))
+  }, [user?.id])
 
   const loadIncidentFromServer = useCallback(async (): Promise<IncidentDetail | null> => {
     if (!token || !vehicle) return null
@@ -339,16 +366,20 @@ export default function App() {
     s.on('incident:dispatched', bump)
     s.on('incident:updated', bump)
     s.on('incident:recalled', bump)
-    s.on('admin_broadcast', (payload: { message?: string }) => {
-      if (payload && typeof payload.message === 'string' && payload.message.trim()) {
-        setBroadcastMessage(payload.message.trim())
+    s.on('admin_broadcast', (payload: unknown) => {
+      const item = parseBroadcastPayload(payload)
+      if (!item || !user?.id) return
+      setBroadcastHistory((prev) => mergeBroadcastIntoLog(user.id, item, prev))
+      setBroadcastPanel(item)
+      if (hasActiveDriverAssignment(incidentRef.current)) {
+        playDriverBroadcastAlert()
       }
     })
     return () => {
       s.emit('unsubscribe_corridor', { corridor_id: vehicle.corridor_id })
       s.disconnect()
     }
-  }, [token, vehicle, refreshIncident, loadHistory])
+  }, [token, vehicle, user?.id, refreshIncident, loadHistory])
 
   useEffect(() => {
     const bump = () => setPendingVersion((v) => v + 1)
@@ -445,7 +476,9 @@ export default function App() {
     setHistory([])
     setHoaxFullScreen(false)
     setAwaitingNextCall(false)
-    setBroadcastMessage(null)
+    setBroadcastPanel(null)
+    if (user?.id) clearBroadcastLog(user.id)
+    setBroadcastHistory([])
     hadLocationSuccess.current = false
     setGpsOk(true)
   }
@@ -601,14 +634,41 @@ export default function App() {
         ? '🟠 Weak signal — cached data shown'
         : '🔴 Offline — last assignment cached'
 
+  const dismissBroadcastPanel = () => setBroadcastPanel(null)
+
   return (
     <div className="drv-app">
-      {broadcastMessage ? (
-        <div className="drv-broadcast" role="status">
-          <p className="drv-broadcast-text">{broadcastMessage}</p>
-          <button type="button" className="drv-btn drv-btn-broadcast-dismiss" onClick={() => setBroadcastMessage(null)}>
-            Dismiss
-          </button>
+      {broadcastPanel ? (
+        <div className="drv-bc-overlay" role="presentation">
+          <div className="drv-bc-backdrop" aria-hidden />
+          <div
+            className="drv-bc-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="drv-bc-heading"
+          >
+            <p id="drv-bc-heading" className="drv-bc-heading">
+              📢 Message from Dispatch Control
+            </p>
+            {broadcastPanel.priority ? (
+              <p
+                className={`drv-bc-priority ${broadcastPanel.priority === 'urgent' ? 'drv-bc-priority--urgent' : 'drv-bc-priority--info'}`}
+              >
+                {broadcastPanel.priority === 'urgent' ? '🔴 Urgent' : '🟡 Info'}
+              </p>
+            ) : null}
+            <p className="drv-bc-sender">
+              Sent by: <strong>{broadcastPanel.sender_name}</strong> at{' '}
+              {new Date(broadcastPanel.created_at).toLocaleString(undefined, {
+                dateStyle: 'medium',
+                timeStyle: 'short',
+              })}
+            </p>
+            <p className="drv-bc-body">{broadcastPanel.message}</p>
+            <button type="button" className="drv-btn drv-bc-gotit" onClick={dismissBroadcastPanel}>
+              Got it ✓
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -746,6 +806,37 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
+            )}
+          </section>
+
+          <section className="drv-section drv-bc-archive" aria-labelledby="bc-archive-heading">
+            <h2 id="bc-archive-heading" className="drv-section-title">
+              Messages
+            </h2>
+            {broadcastHistory.length === 0 ? (
+              <p className="drv-subdued">No broadcast messages yet.</p>
+            ) : (
+              <ul className="drv-bc-archive-list">
+                {broadcastHistory.map((b) => (
+                  <li key={b.id} className="drv-bc-archive-item">
+                    <div className="drv-bc-archive-meta">
+                      <time dateTime={b.created_at}>
+                        {new Date(b.created_at).toLocaleString(undefined, {
+                          dateStyle: 'short',
+                          timeStyle: 'short',
+                        })}
+                      </time>
+                      {b.priority ? (
+                        <span className={b.priority === 'urgent' ? 'drv-bc-pill-urgent' : 'drv-bc-pill-info'}>
+                          {b.priority === 'urgent' ? 'Urgent' : 'Info'}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="drv-bc-archive-sender">From {b.sender_name}</p>
+                    <p className="drv-bc-archive-msg">{b.message}</p>
+                  </li>
+                ))}
+              </ul>
             )}
           </section>
         </main>
