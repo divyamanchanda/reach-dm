@@ -254,11 +254,12 @@ function vehicleStatusToneClass(status: string, isAvailable: boolean): string {
   return 'veh-row--offline'
 }
 
+/** Live map / schematic — warm colours for incidents (distinct from cool ambulance markers). */
 function incidentDotColor(sev: string): string {
   const s = sev.toLowerCase()
-  if (s === 'critical') return '#dc2626'
-  if (s === 'major') return '#ea580c'
-  return '#16a34a'
+  if (s === 'critical') return '#FF2D2D'
+  if (s === 'major') return '#FF6B00'
+  return '#FFD600'
 }
 
 function trustLabel(score: number): string {
@@ -267,12 +268,12 @@ function trustLabel(score: number): string {
   return '🟢 High confidence'
 }
 
-/** Live highway SVG only — marker fill by vehicle.status */
+/** Live highway SVG — cool colours only (blue / purple / cyan), never warm like incidents. */
 function ambulanceDiagramFill(status: string): string {
   const s = status.toLowerCase().replace(/\s+/g, '_')
-  if (s === 'available' || s === 'idle') return '#22c55e'
-  if (s === 'dispatched' || s === 'en_route') return '#f97316'
-  if (s === 'on_scene') return '#ef4444'
+  if (s === 'available' || s === 'idle') return '#0EA5E9'
+  if (s === 'dispatched' || s === 'en_route' || s === 'transporting') return '#8B5CF6'
+  if (s === 'on_scene') return '#06B6D4'
   return '#64748b'
 }
 
@@ -747,16 +748,16 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
           <span className="highway-legend-title">Incident dots</span>
           <ul className="highway-legend-items">
             <li>
-              <span className="hw-leg-dot" style={{ background: '#dc2626' }} aria-hidden />
-              Critical severity
+              <span className="hw-leg-dot hw-leg-dot--pulse" style={{ background: '#FF2D2D' }} aria-hidden />
+              Critical (pulsing)
             </li>
             <li>
-              <span className="hw-leg-dot" style={{ background: '#ea580c' }} aria-hidden />
-              Major severity
+              <span className="hw-leg-dot" style={{ background: '#FF6B00' }} aria-hidden />
+              Major
             </li>
             <li>
-              <span className="hw-leg-dot" style={{ background: '#16a34a' }} aria-hidden />
-              Minor severity
+              <span className="hw-leg-dot" style={{ background: '#FFD600' }} aria-hidden />
+              Minor
             </li>
           </ul>
         </div>
@@ -764,15 +765,15 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
           <span className="highway-legend-title">Ambulance markers</span>
           <ul className="highway-legend-items">
             <li>
-              <span className="hw-leg-dot" style={{ background: '#22c55e' }} aria-hidden />
-              Idle / available
+              <span className="hw-leg-dot" style={{ background: '#0EA5E9' }} aria-hidden />
+              Available / idle
             </li>
             <li>
-              <span className="hw-leg-dot" style={{ background: '#f97316' }} aria-hidden />
-              Dispatched or en route
+              <span className="hw-leg-dot" style={{ background: '#8B5CF6' }} aria-hidden />
+              Dispatched / en route
             </li>
             <li>
-              <span className="hw-leg-dot" style={{ background: '#ef4444' }} aria-hidden />
+              <span className="hw-leg-dot" style={{ background: '#06B6D4' }} aria-hidden />
               On scene
             </li>
           </ul>
@@ -853,7 +854,13 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
             <title>
               {`${inc.incident_type} · ${inc.severity} · KM ${km.toFixed(0)} · ${inc.status} · ${new Date(inc.created_at).toLocaleString()} · Trust ${trustLabel(inc.trust_score)}`}
             </title>
-            <circle r={11} fill={incidentDotColor(inc.severity)} stroke="#0f172a" strokeWidth={2} className="hw-incident-dot" />
+            <circle
+              r={11}
+              fill={incidentDotColor(inc.severity)}
+              stroke="#0f172a"
+              strokeWidth={2}
+              className={`hw-incident-dot ${inc.severity.toLowerCase() === 'critical' ? 'hw-incident-dot--critical' : ''}`}
+            />
           </g>
         ))}
         {vehiclesPlaced.map(({ key, v, km, x, y }) => (
