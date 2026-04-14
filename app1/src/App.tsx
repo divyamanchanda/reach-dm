@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CircleMarker, MapContainer, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet'
+import { latLngBounds } from 'leaflet'
+import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet'
 import { io, Socket } from 'socket.io-client'
 import './App.css'
 import { API, apiUrl, fetchJson, login, patchJson, postJson, type User } from './api'
@@ -117,13 +118,13 @@ function relativeReportedTime(createdAt: string): string {
   return days === 1 ? '1 day ago' : `${days} days ago`
 }
 
-/** True only if `created_at` is a valid time within the last 5 minutes (not in the future). */
+/** True if reported within the last 30 minutes (not in the future). */
 function isNewIncident(createdAt: string): boolean {
   const t = new Date(createdAt).getTime()
   if (Number.isNaN(t)) return false
   const ageMs = Date.now() - t
   if (ageMs < 0) return false
-  return ageMs <= 5 * 60 * 1000
+  return ageMs <= 30 * 60 * 1000
 }
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, major: 1, minor: 2 }
@@ -132,26 +133,39 @@ function severityRank(sev: string): number {
   return SEVERITY_ORDER[sev.toLowerCase()] ?? 9
 }
 
-/** Expired / closed — keep at end of the list. */
+/** Expired / closed — e.g. no nearby-vehicle queries. */
 function isExpiredOrClosedStatus(status: string): boolean {
   return status === 'expired' || status === 'closed' || status === 'archived'
 }
 
-/** 0 = active; 1 = closed/archived; 2 = expired (always last). */
-function listSortBucket(status: string): number {
-  if (status === 'expired') return 2
-  if (status === 'closed' || status === 'archived') return 1
-  return 0
+/** Terminal / inactive — always sort below any active incident. */
+function isTerminalSortStatus(status: string): boolean {
+  const s = status.toLowerCase()
+  return ['expired', 'closed', 'archived', 'recalled', 'cancelled'].includes(s)
 }
 
-/** Active and in-flight first; then closed/archived; expired last. Within bucket: severity, then newest first. */
-function sortIncidentsByPriority(items: Incident[]): Incident[] {
+/** open → verifying → confirmed → dispatched / en route / on scene; NEW (<30m) before older; terminal last. */
+function sortIncidentsDispatchConsole(items: Incident[]): Incident[] {
+  const statusOrder = (status: string): number => {
+    const s = status.toLowerCase()
+    if (s === 'open') return 0
+    if (s === 'verifying') return 1
+    if (s === 'confirmed_real') return 2
+    if (['dispatched', 'en_route', 'on_scene', 'transporting', 'accepted'].includes(s)) return 3
+    return 5
+  }
   return [...items].sort((a, b) => {
-    const ab = listSortBucket(a.status)
-    const bb = listSortBucket(b.status)
-    if (ab !== bb) return ab - bb
-    const rs = severityRank(a.severity) - severityRank(b.severity)
-    if (rs !== 0) return rs
+    const ta = isTerminalSortStatus(a.status)
+    const tb = isTerminalSortStatus(b.status)
+    if (ta !== tb) return ta ? 1 : -1
+    const na = !ta && isNewIncident(a.created_at)
+    const nb = !tb && isNewIncident(b.created_at)
+    if (na !== nb) return na ? -1 : 1
+    const ra = statusOrder(a.status)
+    const rb = statusOrder(b.status)
+    if (ra !== rb) return ra - rb
+    const sr = severityRank(a.severity) - severityRank(b.severity)
+    if (sr !== 0) return sr
     return +new Date(b.created_at) - +new Date(a.created_at)
   })
 }
@@ -164,6 +178,25 @@ const AVG_CORRIDOR_KMH = 80
 
 /** NH48 Bengaluru → Chennai corridor length used for KM interpolation and vehicle ETA projection. */
 const NH48_TOTAL_KM = 312
+
+const NH48_ROUTE_LINE: [number, number][] = [
+  [12.9716, 77.5946],
+  [12.7409, 77.8253],
+  [12.5266, 78.2137],
+  [12.9165, 79.1325],
+  [13.0827, 80.2707],
+]
+
+function hasValidKmMarker(km: number | null | undefined): km is number {
+  return km != null && Number.isFinite(km)
+}
+
+function formatHeaderAvgDispatchMinutes(raw: number | null): string {
+  if (raw == null) return '—'
+  if (raw > 200) return '—'
+  const capped = Math.min(raw, 999)
+  return `${capped.toFixed(1)} min`
+}
 
 function kmFromLatLng(lat: number, lng: number): number {
   const bengaluru = { lat: 12.9716, lng: 77.5946 }
@@ -333,14 +366,6 @@ function reporterCountFromTrustFactors(factors: unknown): number {
   return 1
 }
 
-function hasAiVerifiedFactor(factors: unknown): boolean {
-  if (!Array.isArray(factors)) return false
-  return factors.some((raw) => {
-    if (!raw || typeof raw !== 'object' || !('factor' in raw)) return false
-    return (raw as { factor?: string }).factor === 'ai_verified'
-  })
-}
-
 function hasIncidentGps(lat: number | null, lng: number | null): boolean {
   return lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
 }
@@ -352,6 +377,7 @@ function deriveDispatchTrustDisplay(input: {
   trust_factors: unknown
   latitude: number | null
   longitude: number | null
+  km_marker: number | null
 }): {
   tier: DispatchTrustTier
   emoji: string
@@ -360,9 +386,11 @@ function deriveDispatchTrustDisplay(input: {
   className: string
 } {
   const reporters = reporterCountFromTrustFactors(input.trust_factors)
-  const ai = hasAiVerifiedFactor(input.trust_factors)
   const gps = hasIncidentGps(input.latitude, input.longitude)
+  const hasKm = hasValidKmMarker(input.km_marker)
   const operatorConfirmed = input.status === 'confirmed_real'
+  const blockLikelyKmNoGps = hasKm && !gps
+  const allowLikely = !blockLikelyKmNoGps && (gps || reporters >= 2)
 
   if (operatorConfirmed || reporters >= 3) {
     return {
@@ -373,7 +401,7 @@ function deriveDispatchTrustDisplay(input: {
       className: 'dispatch-trust-badge--verified',
     }
   }
-  if (ai || gps || reporters >= 2) {
+  if (allowLikely) {
     return {
       tier: 'likely',
       emoji: '🟡',
@@ -407,6 +435,7 @@ function DispatchTrustBadge({
     trust_factors: factors,
     latitude: lat,
     longitude: lng,
+    km_marker: incident.km_marker,
   })
   const reportsText = `${d.reporterCount} ${d.reporterCount === 1 ? 'report' : 'reports'}`
   return (
@@ -439,7 +468,7 @@ function buildDriverDispatchSms(incident: Incident, operatorDisplayName: string)
   const km =
     incident.km_marker != null && Number.isFinite(Number(incident.km_marker))
       ? `KM${Math.round(Number(incident.km_marker))}`
-      : 'KM—'
+      : 'KM unknown'
   const type = humanizeIncidentType(incident.incident_type)
   const sev = incident.severity.toLowerCase()
   return `REACH DISPATCH: ${type} ${km} ${sev}. Proceed immediately. - ${operatorDisplayName}`
@@ -588,6 +617,95 @@ function estimatePointFromKm(km: number): { lat: number; lng: number } {
   }
 }
 
+function incidentMapPoint(i: Incident): [number, number] | null {
+  if (hasIncidentGps(i.latitude, i.longitude)) {
+    return [i.latitude as number, i.longitude as number]
+  }
+  if (hasValidKmMarker(i.km_marker)) {
+    const p = estimatePointFromKm(Number(i.km_marker))
+    return [p.lat, p.lng]
+  }
+  return null
+}
+
+function OverviewFitBounds({ latLngs }: { latLngs: [number, number][] }) {
+  const map = useMap()
+  useEffect(() => {
+    if (latLngs.length === 0) {
+      map.setView([12.9, 78.2], 7)
+    } else {
+      map.fitBounds(latLngBounds(latLngs), { padding: [48, 48], maxZoom: 11 })
+    }
+    map.invalidateSize()
+  }, [map, latLngs])
+  return null
+}
+
+function DispatchCorridorOverviewMap({
+  incidents,
+  onSelectIncident,
+}: {
+  incidents: Incident[]
+  onSelectIncident: (id: string) => void
+}) {
+  const latLngs = useMemo(() => {
+    const pts: [number, number][] = NH48_ROUTE_LINE.map((p) => [p[0], p[1]])
+    for (const i of incidents) {
+      if (isTerminalSortStatus(i.status)) continue
+      const pt = incidentMapPoint(i)
+      if (pt) pts.push(pt)
+    }
+    return pts
+  }, [incidents])
+
+  return (
+    <div className="dispatch-overview-map-wrap">
+      <MapContainer
+        className="leaflet-map dispatch-overview-map"
+        center={[12.9, 78.2]}
+        zoom={7}
+        scrollWheelZoom
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        <Polyline
+          positions={NH48_ROUTE_LINE}
+          pathOptions={{ color: '#2563eb', weight: 4, opacity: 0.92, lineCap: 'round' }}
+        />
+        {incidents.map((i) => {
+          if (isTerminalSortStatus(i.status)) return null
+          const pt = incidentMapPoint(i)
+          if (!pt) return null
+          const fill = severityColor[i.severity] ?? '#ef4444'
+          return (
+            <CircleMarker
+              key={i.id}
+              center={pt}
+              radius={8}
+              pathOptions={{
+                color: '#0f172a',
+                weight: 2,
+                fillColor: fill,
+                fillOpacity: 0.9,
+              }}
+              eventHandlers={{ click: () => onSelectIncident(i.id) }}
+            >
+              <Popup>
+                {humanizeIncidentType(i.incident_type)}
+                <br />
+                <span className="map-popup-sub">{i.status}</span>
+              </Popup>
+            </CircleMarker>
+          )
+        })}
+        <OverviewFitBounds latLngs={latLngs} />
+      </MapContainer>
+    </div>
+  )
+}
+
 function RecenterMap({ latitude, longitude }: { latitude: number; longitude: number }) {
   const map = useMap()
   useEffect(() => {
@@ -628,6 +746,7 @@ function App() {
   const [expandedTimelineId, setExpandedTimelineId] = useState<string | null>(null)
   /** Status `expired` cards: collapsed by default until operator expands. */
   const [expiredCardsExpanded, setExpiredCardsExpanded] = useState<Record<string, boolean>>({})
+  const [showExpiredIncidents, setShowExpiredIncidents] = useState(false)
   const [timelineById, setTimelineById] = useState<Record<string, IncidentDetail>>({})
   const [etaTick, setEtaTick] = useState(0)
   const [shiftNotes, setShiftNotes] = useState(() => localStorage.getItem(SHIFT_NOTES_KEY) ?? '')
@@ -680,7 +799,9 @@ function App() {
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         try {
           new Notification('REACH Dispatch — CRITICAL', {
-            body: `${humanizeIncidentType(inc.incident_type)} · KM ${inc.km_marker ?? '—'}`,
+            body: `${humanizeIncidentType(inc.incident_type)} · ${
+              hasValidKmMarker(inc.km_marker) ? `KM ${inc.km_marker}` : 'KM unknown'
+            }`,
             tag: `critical-${inc.id}`,
             requireInteraction: true,
           })
@@ -689,7 +810,7 @@ function App() {
         }
       }
       const km =
-        inc.km_marker != null && Number.isFinite(Number(inc.km_marker)) ? String(inc.km_marker) : '—'
+        hasValidKmMarker(inc.km_marker) ? String(inc.km_marker) : 'unknown'
       setCriticalBanner({
         id: inc.id,
         km,
@@ -701,7 +822,15 @@ function App() {
     }
   }, [incidents, token])
 
-  const sortedIncidents = useMemo(() => sortIncidentsByPriority(incidents), [incidents])
+  const sortedIncidents = useMemo(() => sortIncidentsDispatchConsole(incidents), [incidents])
+  const expiredIncidentCount = useMemo(
+    () => incidents.filter((i) => i.status === 'expired').length,
+    [incidents],
+  )
+  const visibleIncidents = useMemo(
+    () => (showExpiredIncidents ? sortedIncidents : sortedIncidents.filter((i) => i.status !== 'expired')),
+    [sortedIncidents, showExpiredIncidents],
+  )
 
   const selected = useMemo(
     () => incidents.find((i) => i.id === selectedId) ?? null,
@@ -1071,10 +1200,7 @@ function App() {
               <span>Pending: {stats.pending_dispatch}</span>
               <span>Vehicles: {stats.available_vehicles}</span>
               <span>
-                Avg response:{' '}
-                {stats.avg_response_time_minutes != null
-                  ? `${stats.avg_response_time_minutes.toFixed(1)} min`
-                  : '—'}
+                Avg dispatch time: {formatHeaderAvgDispatchMinutes(stats.avg_response_time_minutes)}
               </span>
             </>
           )}
@@ -1148,13 +1274,24 @@ function App() {
       <div className="layout">
         <aside className="list">
           <h3>Live incidents</h3>
-          {sortedIncidents.map((i) => {
+          {expiredIncidentCount > 0 ? (
+            <div className="dispatch-list-toolbar">
+              <button
+                type="button"
+                className="dispatch-toggle-expired-btn"
+                onClick={() => setShowExpiredIncidents((v) => !v)}
+              >
+                {showExpiredIncidents ? 'Hide expired' : 'Show expired'} ({expiredIncidentCount})
+              </button>
+            </div>
+          ) : null}
+          {visibleIncidents.map((i) => {
             void etaTick
             void ageTick
             const isExp = isStatusExpired(i.status)
             const expiredExpanded = !!expiredCardsExpanded[i.id]
             const isExpCollapsed = isExp && !expiredExpanded
-            const hidePriorityBadge = i.status === 'expired' || i.status === 'closed'
+            const hidePriorityBadge = i.status === 'expired'
             return (
             <div
               key={i.id}
@@ -1186,9 +1323,14 @@ function App() {
                 <>
                   <div className="row">
                     <strong>{i.incident_type}</strong>
-                    <span className="pill pill--expired-label">Expired</span>
+                    <span className="pill pill--expired-label">
+                      <span className="expired-pill-long">Expired</span>
+                      <span className="expired-pill-short">EXP</span>
+                    </span>
                   </div>
-                  <div className="meta">KM {i.km_marker ?? '—'}</div>
+                  <div className={`meta ${!hasValidKmMarker(i.km_marker) ? 'inc-km-unknown' : ''}`}>
+                    {hasValidKmMarker(i.km_marker) ? `KM ${i.km_marker}` : 'KM unknown'}
+                  </div>
                   <div className="meta">{relativeReportedTime(i.created_at)}</div>
                 </>
               ) : (
@@ -1201,7 +1343,10 @@ function App() {
                   )}
                   {!isExp && isNewIncident(i.created_at) && <span className="new-pill">NEW</span>}
                   {isExp ? (
-                    <span className="pill pill--expired-label">Expired</span>
+                    <span className="pill pill--expired-label">
+                      <span className="expired-pill-long">Expired</span>
+                      <span className="expired-pill-short">EXP</span>
+                    </span>
                   ) : (
                     <span className="pill" style={{ background: severityColor[i.severity] }}>
                       {i.severity}
@@ -1231,7 +1376,9 @@ function App() {
               <div className="meta inc-card-trust-line">
                 <DispatchTrustBadge incident={i} detail={selectedId === i.id ? incidentDetail : null} />
               </div>
-              <div className="meta">KM {i.km_marker ?? '—'}</div>
+              <div className={`meta ${!hasValidKmMarker(i.km_marker) ? 'inc-km-unknown' : ''}`}>
+                {hasValidKmMarker(i.km_marker) ? `KM ${i.km_marker}` : 'KM unknown'}
+              </div>
               <div className="meta">
                 Report {(i.public_report_id ?? i.id).slice(0, 8)} · {relativeReportedTime(i.created_at)}
               </div>
@@ -1312,7 +1459,8 @@ function App() {
               ) : null}
               {isIncidentExpiredByAge(i.created_at) && i.status !== 'expired' ? (
                 <span className="expired-badge" title="Older than 2 hours since created — no actions available">
-                  Expired
+                  <span className="expired-badge-long">Expired</span>
+                  <span className="expired-badge-short">EXP</span>
                 </span>
               ) : i.status === 'expired' ? null : i.status === 'recalled' ? (
                 <p className="recall-msg">Ambulance recalled — hoax confirmed</p>
@@ -1392,7 +1540,15 @@ function App() {
         </aside>
 
         <aside className="detail">
-          {!selected && <p className="detail-empty-prompt">Select an incident.</p>}
+          {!selected && (
+            <div className="detail-overview-empty">
+              <h3 className="detail-section-title">NH48 corridor</h3>
+              <p className="detail-overview-hint">
+                Active incidents are shown on the map. Select a dot or choose an incident from the list.
+              </p>
+              <DispatchCorridorOverviewMap incidents={incidents} onSelectIncident={setSelectedId} />
+            </div>
+          )}
           {selected && (
             <div className="detail-panel-inner">
               <button
@@ -1412,7 +1568,11 @@ function App() {
               <header className="detail-hero">
                 <div className="detail-hero-km">
                   <span className="detail-hero-km-label">KM</span>
-                  <span className="detail-hero-km-num">{selected.km_marker ?? '—'}</span>
+                  {hasValidKmMarker(selected.km_marker) ? (
+                    <span className="detail-hero-km-num">{selected.km_marker}</span>
+                  ) : (
+                    <span className="detail-hero-km-num detail-hero-km-unknown">unknown</span>
+                  )}
                 </div>
                 <h2 className="detail-hero-type">{selected.incident_type}</h2>
                 <div className="detail-hero-badges">
@@ -1752,11 +1912,13 @@ function App() {
                 trust_factors: detail?.trust_factors ?? selected.trust_factors ?? [],
                 latitude: detail?.latitude ?? selected.latitude,
                 longitude: detail?.longitude ?? selected.longitude,
+                km_marker: detail?.km_marker ?? selected.km_marker,
               })
               const km = detail?.km_marker ?? selected.km_marker
               const corridorName = corridors.find((c) => c.id === selected.corridor_id)?.name ?? 'NH48'
-              const locationLine =
-                km != null && Number.isFinite(Number(km)) ? `KM ${Number(km)} on ${corridorName}` : '—'
+              const locationLine = hasValidKmMarker(km)
+                ? `KM ${Number(km)} on ${corridorName}`
+                : 'KM unknown'
               const factorBullets = (detail?.trust_factors ?? selected.trust_factors ?? [])
                 .map((raw) => formatTrustFactorBullet(raw))
                 .filter((x): x is string => Boolean(x))

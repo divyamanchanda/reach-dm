@@ -226,6 +226,95 @@ button:disabled {
   color: #94a3b8;
 }
 
+.detail-overview-empty {
+  padding-right: 0.25rem;
+}
+
+.detail-overview-hint {
+  margin: 0 0 0.75rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: #94a3b8;
+}
+
+.dispatch-overview-map-wrap {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #334155;
+}
+
+.dispatch-overview-map {
+  height: min(42vh, 360px);
+  width: 100%;
+  z-index: 0;
+}
+
+.dispatch-list-toolbar {
+  margin: 0 0 0.65rem;
+}
+
+.dispatch-toggle-expired-btn {
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.35rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #475569;
+  background: #1e293b;
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.dispatch-toggle-expired-btn:hover {
+  border-color: #64748b;
+  background: #334155;
+}
+
+.inc-km-unknown {
+  color: #64748b;
+  font-style: italic;
+  font-weight: 500;
+}
+
+.detail-hero-km-unknown {
+  font-size: 1.5rem;
+  font-style: italic;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.expired-badge-long,
+.expired-pill-long {
+  display: inline;
+}
+
+.expired-badge-short,
+.expired-pill-short {
+  display: none;
+}
+
+@media (max-width: 420px) {
+  .expired-badge {
+    font-size: 0.62rem;
+    padding: 0.28rem 0.5rem;
+  }
+
+  .expired-badge-long,
+  .expired-pill-long {
+    display: none;
+  }
+
+  .expired-badge-short,
+  .expired-pill-short {
+    display: inline;
+  }
+
+  .pill--expired-label {
+    font-size: 0.62rem;
+    padding: 0.1rem 0.32rem;
+  }
+}
+
 .detail-panel-close {
   position: absolute;
   top: 0;
@@ -503,6 +592,10 @@ button:disabled {
   font-size: 0.72rem;
   text-transform: none;
   letter-spacing: 0.02em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inc-card-expired-toolbar {
