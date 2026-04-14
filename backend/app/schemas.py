@@ -377,73 +377,52 @@ class BroadcastBody(BaseModel):
     )
 
 
-class AnalyticsResponsePointOut(BaseModel):
-    incident_id: uuid.UUID
-    reported_at: datetime
-    response_minutes: float
+class AnalyticsIncidentRowOut(BaseModel):
+    """Incident snapshot for ops dashboard charts (time-bounded window)."""
+
+    id: uuid.UUID
+    incident_type: str
+    severity: str
+    status: str
+    created_at: datetime
+    km_marker: float | None
+    latitude: float | None
+    longitude: float | None
+    first_response_minutes: float | None
 
 
-class AnalyticsHeatmapBucketOut(BaseModel):
-    segment_start_km: float
-    incident_count: int
+class AdminAnalyticsFleetOut(BaseModel):
+    available: int
+    dispatched: int
+    offline: int
 
 
-class AnalyticsVehicleDispatchOut(BaseModel):
-    vehicle_label: str
+class AdminAnalyticsCoverageOut(BaseModel):
+    active_corridors: int
+    km_monitored: float
+
+
+class AdminAnalyticsVehiclePerformanceOut(BaseModel):
+    vehicle_id: uuid.UUID
+    label: str
+    driver_name: str | None
     dispatch_count: int
-
-
-class AnalyticsActiveDriverOut(BaseModel):
-    driver_name: str
-    phone: str
-    vehicle_label: str
-    vehicle_status: str
-    last_gps_at: datetime | None
-    on_active_call: bool
-
-
-class AnalyticsKpiTrendOut(BaseModel):
-    arrow: Literal["up", "down", "flat"]
-    favorable: bool
-
-
-class AdminAnalyticsKpisOut(BaseModel):
-    total_incidents: int
-    total_incidents_delta: int
-    total_incidents_trend: AnalyticsKpiTrendOut
-
-    avg_response_time_minutes: float | None
-    avg_response_time_prev_minutes: float | None
-    response_time_under_target: bool
-    avg_response_time_trend: AnalyticsKpiTrendOut
-
-    resolution_rate_pct: float | None
-    resolution_rate_prev_pct: float | None
-    resolution_rate_trend: AnalyticsKpiTrendOut
-
-    hoax_rate_pct: float | None
-    hoax_rate_prev_pct: float | None
-    hoax_rate_trend: AnalyticsKpiTrendOut
-
-    ambulances_on_duty: int
-    ambulances_total: int
-    ambulances_trend: AnalyticsKpiTrendOut
-
-    sos_app: int
-    sos_sms: int
-    sos_auto: int
-    sos_source_trend: AnalyticsKpiTrendOut
+    avg_response_minutes: float | None
+    best_response_minutes: float | None
+    status: str
+    on_scene_now: bool
+    latitude: float | None
+    longitude: float | None
 
 
 class AdminAnalyticsOut(BaseModel):
     period: str
     comparison_label: str
-    kpis: AdminAnalyticsKpisOut
-    avg_response_time_minutes: float | None
-    response_time_last_20: list[AnalyticsResponsePointOut]
-    heatmap_buckets: list[AnalyticsHeatmapBucketOut]
-    vehicle_dispatch_counts: list[AnalyticsVehicleDispatchOut]
-    active_drivers: list[AnalyticsActiveDriverOut]
+    incidents: list[AnalyticsIncidentRowOut]
+    incidents_previous: list[AnalyticsIncidentRowOut]
+    fleet: AdminAnalyticsFleetOut
+    coverage: AdminAnalyticsCoverageOut
+    vehicle_performance: list[AdminAnalyticsVehiclePerformanceOut]
 
 
 class SpeedZoneOut(BaseModel):

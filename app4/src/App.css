@@ -1568,3 +1568,484 @@ tr:last-child td {
   flex-wrap: wrap;
   gap: 0.35rem;
 }
+
+/* —— REACH Operations dashboard (Analytics) —— */
+.ops-dashboard {
+  --ops-glow: rgba(56, 189, 248, 0.14);
+  max-width: 1400px;
+}
+
+.ops-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem 1.5rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.6);
+}
+
+.ops-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.ops-live-line {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.ops-pulse-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  animation: ops-pulse-dot 1.4s ease-out infinite;
+}
+
+@keyframes ops-pulse-dot {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+.ops-topbar-mid {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.ops-period-toggle {
+  display: inline-flex;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.ops-period-btn {
+  padding: 0.4rem 0.85rem;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ops-period-btn:hover {
+  color: #e2e8f0;
+  background: rgba(51, 65, 85, 0.35);
+}
+
+.ops-period-btn--active {
+  color: #f8fafc;
+  background: rgba(14, 165, 233, 0.25);
+}
+
+.ops-updated {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.ops-btn-pdf {
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ops-btn-pdf:hover {
+  background: rgba(56, 189, 248, 0.22);
+}
+
+.ops-loading {
+  color: var(--muted);
+}
+
+.ops-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.ops-kpi-card {
+  position: relative;
+  padding: 1rem 1rem 1.1rem;
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.88));
+  border: 1px solid rgba(51, 65, 85, 0.75);
+  box-shadow: 0 0 18px var(--ops-glow);
+}
+
+.ops-kpi-card--split {
+  grid-column: span 1;
+}
+
+.ops-kpi-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+
+.ops-kpi-ico {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.ops-kpi-name {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+}
+
+.ops-warn-ico {
+  margin-left: auto;
+  font-size: 1rem;
+}
+
+.ops-kpi-num {
+  font-size: 1.75rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #f8fafc;
+  line-height: 1.15;
+}
+
+.ops-kpi-num--sm {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.ops-kpi-sub {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ops-kpi-sub--good {
+  color: #4ade80;
+}
+
+.ops-kpi-sub--bad {
+  color: #f87171;
+}
+
+.ops-kpi-sub--neutral {
+  color: #94a3b8;
+}
+
+.ops-kpi-sub--muted {
+  color: #64748b;
+}
+
+.ops-kpi-gauge-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ops-kpi-gauge-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.ops-gauge-wrap {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  flex-shrink: 0;
+}
+
+.ops-gauge-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 1rem;
+  font-weight: 800;
+  color: #e2e8f0;
+  pointer-events: none;
+}
+
+.ops-gauge-empty {
+  height: 112px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.ops-kpi-donut-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ops-mini-donut {
+  width: 100px;
+  height: 100px;
+  flex-shrink: 0;
+}
+
+.ops-fleet-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.ops-fleet-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 0.2rem;
+  vertical-align: middle;
+}
+
+.ops-fleet-dot--avail {
+  background: #0ea5e9;
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.5);
+}
+
+.ops-fleet-dot--disp {
+  background: #8b5cf6;
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.45);
+}
+
+.ops-fleet-dot--off {
+  background: #64748b;
+}
+
+.ops-panel {
+  padding: 1rem 1.1rem 1.25rem;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(51, 65, 85, 0.65);
+  margin-bottom: 1rem;
+}
+
+.ops-panel h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.ops-panel--map {
+  margin-bottom: 1rem;
+}
+
+.ops-map-shell {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(51, 65, 85, 0.8);
+}
+
+.ops-map-canvas {
+  height: min(52vh, 520px);
+  width: 100%;
+  background: #0f172a;
+}
+
+.ops-map-live-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fecaca;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.ops-map-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: ops-map-live-pulse 1s ease-in-out infinite;
+}
+
+@keyframes ops-map-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.2);
+  }
+}
+
+.ops-leaflet-divicon {
+  background: transparent !important;
+  border: none !important;
+}
+
+.ops-map-dot {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #0f172a;
+  box-sizing: border-box;
+}
+
+.ops-map-dot.ops-inc--pulse {
+  animation: ops-inc-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ops-inc-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.2);
+  }
+}
+
+.ops-map-veh {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #0f172a;
+  box-sizing: border-box;
+}
+
+.ops-popup {
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.ops-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.ops-chart-tall {
+  min-height: 280px;
+}
+
+.ops-peak-label {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #f87171;
+}
+
+.ops-placeholder {
+  margin: 2rem 0;
+  text-align: center;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.ops-panel--table {
+  margin-top: 0.5rem;
+}
+
+.ops-perf-table {
+  width: 100%;
+  font-size: 0.86rem;
+  border-collapse: collapse;
+}
+
+.ops-perf-table th,
+.ops-perf-table td {
+  padding: 0.55rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.ops-perf-table tbody tr {
+  cursor: pointer;
+}
+
+.ops-perf-table tbody tr:hover {
+  background: rgba(51, 65, 85, 0.25);
+}
+
+.ops-perf-row--fast {
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.ops-perf-row--slow {
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.ops-perf-row--hi {
+  outline: 2px solid rgba(56, 189, 248, 0.55);
+  outline-offset: -2px;
+}
+
+.ops-onscene-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-weight: 700;
+  color: #fecaca;
+}
+
+@media print {
+  .app-shell .sidebar {
+    display: none !important;
+  }
+
+  .app-shell .main {
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .ops-btn-pdf,
+  .ops-period-toggle {
+    display: none !important;
+  }
+
+  .ops-map-canvas {
+    height: 360px;
+    break-inside: avoid;
+  }
+}

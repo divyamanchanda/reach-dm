@@ -1,54 +1,921 @@
 import type { FormEvent } from 'react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import L from 'leaflet'
+import markerIcon from 'leaflet/dist/images/marker-icon.png'
+import markerShadow from 'leaflet/dist/images/marker-shadow.png'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  ComposedChart,
+  LabelList,
+  Legend,
+  Line,
+  Pie,
+  PieChart,
+  RadialBar,
+  RadialBarChart,
+  ReferenceArea,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+import 'leaflet/dist/leaflet.css'
 import { deleteJson, fetchJson, isSessionExpiredError, patchJson, postJson } from './api'
 
-const NH48_KM = 312
-const SEG_KM = 20
-const N_SEG = Math.ceil(NH48_KM / SEG_KM)
-const HW_PAD = 52
-const HW_W = 1000
+const DefaultIcon = L.icon({
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+})
+L.Marker.prototype.options.icon = DefaultIcon
+
+const NH48_KM_LENGTH = 312
+/** Demo NH48 polyline (Bengaluru–Chennai), matches backend geo seed. */
+const NH48_WAYPOINTS: L.LatLngExpression[] = [
+  [12.9716, 77.5946],
+  [12.7409, 77.8253],
+  [12.5266, 78.2137],
+  [12.9165, 79.1325],
+  [13.0827, 80.2707],
+]
+
+/** Icons as codepoints — keeps source file encoding-safe. */
+const Ic = {
+  up: '\u25b2',
+  down: '\u25bc',
+  alert: String.fromCodePoint(0x1f6a8),
+  clock: String.fromCodePoint(0x23f1, 0xfe0f),
+  tick: String.fromCodePoint(0x2705),
+  masks: String.fromCodePoint(0x1f3ad),
+  ambulance: String.fromCodePoint(0x1f691),
+  pin: String.fromCodePoint(0x1f4cd),
+  warn: String.fromCodePoint(0x26a0, 0xfe0f),
+  liveDot: String.fromCodePoint(0x1f534),
+  urgentLbl: String.fromCodePoint(0x1f534),
+  infoLbl: String.fromCodePoint(0x1f7e1),
+} as const
+
+const TOWN_ANCHORS_KM: { km: number; name: string }[] = [
+  { km: 0, name: 'Bengaluru' },
+  { km: 52, name: 'Hosur' },
+  { km: 100, name: 'Krishnagiri' },
+  { km: 218, name: 'Vellore' },
+  { km: 312, name: 'Chennai' },
+]
+
+function nearestTownForSegmentMid(midKm: number): string {
+  let best = TOWN_ANCHORS_KM[0]
+  let d = Math.abs(midKm - best.km)
+  for (const t of TOWN_ANCHORS_KM) {
+    const nd = Math.abs(midKm - t.km)
+    if (nd < d) {
+      d = nd
+      best = t
+    }
+  }
+  return best.name
+}
+
+function latLngFromKm(km: number): L.LatLngTuple {
+  const t = Math.max(0, Math.min(1, km / NH48_KM_LENGTH))
+  const a = NH48_WAYPOINTS[0] as L.LatLngTuple
+  const b = NH48_WAYPOINTS[NH48_WAYPOINTS.length - 1] as L.LatLngTuple
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+}
 
 export type AnalyticsPeriod = 'today' | '7d' | '30d'
 
-type KpiTrend = { arrow: 'up' | 'down' | 'flat'; favorable: boolean }
+export type AnalyticsIncidentRow = {
+  id: string
+  incident_type: string
+  severity: string
+  status: string
+  created_at: string
+  km_marker: number | null
+  latitude: number | null
+  longitude: number | null
+  first_response_minutes: number | null
+}
 
 export type AdminAnalytics = {
   period: AnalyticsPeriod
   comparison_label: string
-  kpis: {
-    total_incidents: number
-    total_incidents_delta: number
-    total_incidents_trend: KpiTrend
-    avg_response_time_minutes: number | null
-    avg_response_time_prev_minutes: number | null
-    response_time_under_target: boolean
-    avg_response_time_trend: KpiTrend
-    resolution_rate_pct: number | null
-    resolution_rate_prev_pct: number | null
-    resolution_rate_trend: KpiTrend
-    hoax_rate_pct: number | null
-    hoax_rate_prev_pct: number | null
-    hoax_rate_trend: KpiTrend
-    ambulances_on_duty: number
-    ambulances_total: number
-    ambulances_trend: KpiTrend
-    sos_app: number
-    sos_sms: number
-    sos_auto: number
-    sos_source_trend: KpiTrend
-  }
-  avg_response_time_minutes: number | null
-  response_time_last_20: { incident_id: string; reported_at: string; response_minutes: number }[]
-  heatmap_buckets: { segment_start_km: number; incident_count: number }[]
-  vehicle_dispatch_counts: { vehicle_label: string; dispatch_count: number }[]
-  active_drivers: {
-    driver_name: string
-    phone: string
-    vehicle_label: string
-    vehicle_status: string
-    last_gps_at: string | null
-    on_active_call: boolean
+  incidents: AnalyticsIncidentRow[]
+  incidents_previous: AnalyticsIncidentRow[]
+  fleet: { available: number; dispatched: number; offline: number }
+  coverage: { active_corridors: number; km_monitored: number }
+  vehicle_performance: {
+    vehicle_id: string
+    label: string
+    driver_name: string | null
+    dispatch_count: number
+    avg_response_minutes: number | null
+    best_response_minutes: number | null
+    status: string
+    on_scene_now: boolean
+    latitude: number | null
+    longitude: number | null
   }[]
+}
+
+type LiveMapIncident = {
+  id: string
+  incident_type: string
+  severity: string
+  km_marker: number | null
+  status: string
+  created_at: string
+  latitude: number | null
+  longitude: number | null
+  public_report_id?: string | null
+}
+
+type LiveMapVehicle = {
+  id: string
+  label: string
+  status: string
+  km_marker: number | null
+  latitude: number | null
+  longitude: number | null
+  assigned_incident_type?: string | null
+  driver_name?: string | null
+}
+
+type LiveMapOut = {
+  corridors: {
+    id: string
+    name: string
+    incidents: LiveMapIncident[]
+    vehicles: LiveMapVehicle[]
+  }[]
+}
+
+const INCIDENT_SEVERITY_COLOR: Record<string, string> = {
+  critical: '#FF2D2D',
+  major: '#FF6B00',
+  minor: '#FFD600',
+}
+
+function vehicleStatusColor(status: string): string {
+  const s = status.toLowerCase()
+  if (s === 'available' || s === 'idle') return '#0EA5E9'
+  if (s === 'dispatched' || s === 'en_route' || s === 'transporting') return '#8B5CF6'
+  if (s === 'on_scene') return '#06B6D4'
+  return '#64748b'
+}
+
+function incidentMarkerHtml(severity: string): string {
+  const c = INCIDENT_SEVERITY_COLOR[severity.toLowerCase()] ?? '#f97316'
+  const pulse = severity.toLowerCase() === 'critical' ? ' ops-inc--pulse' : ''
+  return `<span class="ops-map-dot${pulse}" style="background:${c}"></span>`
+}
+
+function vehicleMarkerHtml(color: string): string {
+  return `<span class="ops-map-veh" style="background:${color}"></span>`
+}
+
+function mean(nums: number[]): number | null {
+  if (nums.length === 0) return null
+  return nums.reduce((a, b) => a + b, 0) / nums.length
+}
+
+function resolutionRatePct(incidents: AnalyticsIncidentRow[]): number | null {
+  if (incidents.length === 0) return null
+  const cleared = incidents.filter((i) => ['closed', 'archived'].includes(i.status.toLowerCase())).length
+  return Math.round((1000 * cleared) / incidents.length) / 10
+}
+
+function hoaxRatePct(incidents: AnalyticsIncidentRow[]): number | null {
+  if (incidents.length === 0) return null
+  const hoax = incidents.filter((i) => i.status.toLowerCase() === 'recalled').length
+  return Math.round((1000 * hoax) / incidents.length) / 10
+}
+
+const TYPE_KEYS = ['accident', 'medical_emergency', 'breakdown', 'fire', 'obstacle_on_road'] as const
+const TYPE_LABEL: Record<string, string> = {
+  accident: 'Accident',
+  medical_emergency: 'Medical Emergency',
+  breakdown: 'Breakdown',
+  fire: 'Fire',
+  obstacle_on_road: 'Obstacle',
+  other: 'Other',
+}
+
+const TYPE_COLORS = ['#38bdf8', '#a78bfa', '#f472b6', '#fb923c', '#4ade80', '#94a3b8']
+
+function bucketIncidentType(raw: string): string {
+  const k = raw.toLowerCase()
+  if ((TYPE_KEYS as readonly string[]).includes(k)) return k
+  if (k.includes('medical')) return 'medical_emergency'
+  if (k.includes('obstacle')) return 'obstacle_on_road'
+  return 'other'
+}
+
+function formatPeakLabel(hourCounts: number[]): string {
+  const ranked = hourCounts
+    .map((c, h) => ({ h, c }))
+    .filter((x) => x.c > 0)
+    .sort((a, b) => b.c - a.c || a.h - b.h)
+  if (ranked.length === 0) return ''
+  const top = ranked.slice(0, 3).map((r) => r.h)
+  top.sort((a, b) => a - b)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const ranges: string[] = []
+  let s = top[0]
+  let p = top[0]
+  for (let i = 1; i < top.length; i++) {
+    if (top[i] === p + 1) p = top[i]
+    else {
+      ranges.push(s === p ? `${pad(s)}:00` : `${pad(s)}:00–${pad(p + 1)}:00`)
+      s = p = top[i]
+    }
+  }
+  ranges.push(s === p ? `${pad(s)}:00` : `${pad(s)}:00–${pad(p + 1)}:00`)
+  return `Peak: ${ranges.join(', ')}`
+}
+
+function stretchBarColor(count: number): string {
+  if (count >= 3) return '#ef4444'
+  if (count === 2) return '#fb923c'
+  if (count === 1) return '#facc15'
+  return '#475569'
+}
+
+function OpsLiveMap({
+  liveMap,
+  highlightVehicleId,
+}: {
+  liveMap: LiveMapOut | null
+  highlightVehicleId: string | null
+}) {
+  const rootRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<L.Map | null>(null)
+  const vehMarkersRef = useRef<Map<string, L.Marker>>(new Map())
+  const layerRef = useRef<L.LayerGroup | null>(null)
+
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el || mapRef.current) return
+    const map = L.map(el, { scrollWheelZoom: true }).setView([12.9, 78.2], 8)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap',
+      maxZoom: 19,
+    }).addTo(map)
+    const poly = L.polyline(NH48_WAYPOINTS, { color: '#475569', weight: 4, opacity: 0.75 }).addTo(map)
+    map.fitBounds(poly.getBounds(), { padding: [40, 40] })
+    layerRef.current = L.layerGroup().addTo(map)
+    mapRef.current = map
+    return () => {
+      map.remove()
+      mapRef.current = null
+      layerRef.current = null
+      vehMarkersRef.current.clear()
+    }
+  }, [])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const layer = layerRef.current
+    if (!map || !layer || !liveMap) return
+    layer.clearLayers()
+    vehMarkersRef.current.clear()
+
+    for (const c of liveMap.corridors) {
+      for (const inc of c.incidents) {
+        let lat = inc.latitude
+        let lng = inc.longitude
+        if ((lat == null || lng == null) && inc.km_marker != null) {
+          ;[lat, lng] = latLngFromKm(inc.km_marker)
+        }
+        if (lat == null || lng == null) continue
+        const icon = L.divIcon({
+          className: 'ops-leaflet-divicon',
+          html: incidentMarkerHtml(inc.severity),
+          iconSize: [20, 20],
+          iconAnchor: [10, 10],
+        })
+        const m = L.marker([lat, lng], { icon })
+        m.bindPopup(
+          `<div class="ops-popup"><strong>${inc.incident_type.replace(/_/g, ' ')}</strong><br/>` +
+            `${inc.severity} · ${inc.status}<br/>` +
+            `KM: ${inc.km_marker != null ? inc.km_marker : '—'}<br/>` +
+            `${new Date(inc.created_at).toLocaleString()}</div>`,
+        )
+        m.addTo(layer)
+      }
+
+      for (const v of c.vehicles) {
+        let lat = v.latitude
+        let lng = v.longitude
+        if ((lat == null || lng == null) && v.km_marker != null) {
+          ;[lat, lng] = latLngFromKm(v.km_marker)
+        }
+        if (lat == null || lng == null) continue
+        const col = vehicleStatusColor(v.status)
+        const icon = L.divIcon({
+          className: 'ops-leaflet-divicon',
+          html: vehicleMarkerHtml(col),
+          iconSize: [18, 18],
+          iconAnchor: [9, 9],
+        })
+        const m = L.marker([lat, lng], { icon })
+        m.bindPopup(
+          `<div class="ops-popup"><strong>${v.label}</strong><br/>` +
+            `${v.status}${v.driver_name ? `<br/>Driver: ${v.driver_name}` : ''}` +
+            `${v.assigned_incident_type ? `<br/>Assignment: ${v.assigned_incident_type}` : ''}</div>`,
+        )
+        m.addTo(layer)
+        vehMarkersRef.current.set(v.id, m)
+      }
+    }
+
+    if (highlightVehicleId) {
+      const mk = vehMarkersRef.current.get(highlightVehicleId)
+      if (mk) {
+        const ll = mk.getLatLng()
+        map.setView(ll, Math.max(map.getZoom(), 11), { animate: true })
+        mk.openPopup()
+      }
+    }
+  }, [liveMap, highlightVehicleId])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    setTimeout(() => map.invalidateSize(), 200)
+  }, [liveMap])
+
+  return (
+    <div className="ops-map-shell">
+      <div ref={rootRef} className="ops-map-canvas" />
+      <div className="ops-map-live-badge" aria-hidden>
+        <span className="ops-map-live-dot" /> LIVE
+      </div>
+    </div>
+  )
+}
+
+function GaugeAvgResponse({ minutes }: { minutes: number | null }) {
+  if (minutes == null) {
+    return <div className="ops-gauge-empty">—</div>
+  }
+  const maxM = 30
+  const pct = Math.min(100, (minutes / maxM) * 100)
+  let col = '#22c55e'
+  if (minutes > 15) col = '#ef4444'
+  else if (minutes >= 8) col = '#f59e0b'
+  const data = [{ name: 'r', value: pct, fill: col }]
+  return (
+    <div className="ops-gauge-wrap">
+      <RadialBarChart width={112} height={112} cx={56} cy={56} innerRadius={32} outerRadius={48} data={data} startAngle={90} endAngle={-270}>
+        <RadialBar dataKey="value" cornerRadius={6} background={{ fill: '#1e293b' }} />
+      </RadialBarChart>
+      <span className="ops-gauge-center">{minutes.toFixed(1)}</span>
+    </div>
+  )
+}
+
+const PERIOD_OPTIONS: { id: AnalyticsPeriod; label: string }[] = [
+  { id: 'today', label: 'Today' },
+  { id: '7d', label: '7 days' },
+  { id: '30d', label: '30 days' },
+]
+
+const REFRESH_MS = 15_000
+
+export function AnalyticsPage({ token, onError }: { token: string; onError: (msg: string | null) => void }) {
+  const [period, setPeriod] = useState<AnalyticsPeriod>('7d')
+  const [data, setData] = useState<AdminAnalytics | null>(null)
+  const [liveMap, setLiveMap] = useState<LiveMapOut | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [highlightVehicleId, setHighlightVehicleId] = useState<string | null>(null)
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [a, m] = await Promise.all([
+        fetchJson<AdminAnalytics>(`/admin/analytics?period=${encodeURIComponent(period)}`, token),
+        fetchJson<LiveMapOut>('/admin/live-map', token),
+      ])
+      setData(a)
+      setLiveMap(m)
+      setLastUpdated(new Date())
+      onError(null)
+    } catch (e: unknown) {
+      if (isSessionExpiredError(e)) return
+      onError(e instanceof Error ? e.message : 'Failed to load operations data')
+    }
+  }, [token, onError, period])
+
+  useEffect(() => {
+    void loadAll()
+  }, [loadAll])
+
+  useEffect(() => {
+    const t = setInterval(() => void loadAll(), REFRESH_MS)
+    return () => clearInterval(t)
+  }, [loadAll])
+
+  const incidents = data?.incidents ?? []
+  const prevIncidents = data?.incidents_previous ?? []
+  const hasPrev = prevIncidents.length > 0
+
+  const metrics = useMemo(() => {
+    const curN = incidents.length
+    const prevN = prevIncidents.length
+    const deltaTotal = curN - prevN
+
+    const respVals = incidents.map((i) => i.first_response_minutes).filter((x): x is number => x != null)
+    const avgResp = mean(respVals)
+
+    const prevRespVals = prevIncidents.map((i) => i.first_response_minutes).filter((x): x is number => x != null)
+    const avgPrevResp = mean(prevRespVals)
+
+    const resPct = resolutionRatePct(incidents)
+    const resPrevPct = resolutionRatePct(prevIncidents)
+
+    const hoaxPct = hoaxRatePct(incidents)
+    const hoaxPrevPct = hoaxRatePct(prevIncidents)
+
+    return {
+      deltaTotal,
+      avgResp,
+      avgPrevResp,
+      resPct,
+      resPrevPct,
+      hoaxPct,
+      hoaxPrevPct,
+      prevN,
+      curN,
+    }
+  }, [incidents, prevIncidents, hasPrev])
+
+  const typeChartData = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const i of incidents) {
+      const b = bucketIncidentType(i.incident_type)
+      m.set(b, (m.get(b) ?? 0) + 1)
+    }
+    const order = [...TYPE_KEYS, 'other']
+    const rows = order
+      .map((k) => ({ key: k, name: TYPE_LABEL[k] ?? k, value: m.get(k) ?? 0 }))
+      .filter((r) => r.value > 0)
+    const sum = rows.reduce((a, r) => a + r.value, 0)
+    return rows.map((r) => ({
+      ...r,
+      pct: sum ? Math.round((1000 * r.value) / sum) / 10 : 0,
+    }))
+  }, [incidents])
+
+  const hourData = useMemo(() => {
+    const counts = Array.from({ length: 24 }, () => 0)
+    for (const i of incidents) {
+      const h = new Date(i.created_at).getHours()
+      counts[h] += 1
+    }
+    const ranked = counts.map((c, h) => ({ h, c })).sort((a, b) => b.c - a.c || a.h - b.h)
+    const topHours = new Set(ranked.slice(0, 3).filter((x) => x.c > 0).map((x) => x.h))
+    return counts.map((c, hour) => ({
+      hour: `${String(hour).padStart(2, '0')}:00`,
+      hourNum: hour,
+      count: c,
+      top: topHours.has(hour) && c > 0,
+    }))
+  }, [incidents])
+
+  const peakLabel = useMemo(() => formatPeakLabel(hourData.map((d) => d.count)), [hourData])
+
+  const responseTrendData = useMemo(() => {
+    const withResp = incidents
+      .filter((i) => i.first_response_minutes != null)
+      .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
+      .slice(0, 10)
+      .reverse()
+      .map((i, idx) => ({
+        n: idx + 1,
+        minutes: i.first_response_minutes as number,
+        label: `#${idx + 1}`,
+      }))
+    return withResp
+  }, [incidents])
+
+  const stretchData = useMemo(() => {
+    const counts = new Map<number, number>()
+    for (const i of incidents) {
+      if (i.km_marker == null) continue
+      const seg = Math.floor(i.km_marker / 20) * 20
+      counts.set(seg, (counts.get(seg) ?? 0) + 1)
+    }
+    const rows: { seg: number; count: number; label: string; fill: string }[] = []
+    for (let s = 0; s < NH48_KM_LENGTH; s += 20) {
+      const end = Math.min(s + 20, NH48_KM_LENGTH)
+      const cnt = counts.get(s) ?? 0
+      const mid = s + (end - s) / 2
+      const town = nearestTownForSegmentMid(mid)
+      rows.push({
+        seg: s,
+        count: cnt,
+        label: `KM ${s}–${end} · ${town}`,
+        fill: stretchBarColor(cnt),
+      })
+    }
+    return [...rows].sort((a, b) => b.count - a.count || a.seg - b.seg)
+  }, [incidents])
+
+  const vehicleRowsSorted = useMemo(() => {
+    const rows = [...(data?.vehicle_performance ?? [])]
+    rows.sort((a, b) => {
+      const av = a.avg_response_minutes
+      const bv = b.avg_response_minutes
+      if (av == null && bv == null) return a.label.localeCompare(b.label)
+      if (av == null) return 1
+      if (bv == null) return -1
+      return av - bv
+    })
+    const withAvg = rows.filter((r) => r.avg_response_minutes != null).map((r) => r.avg_response_minutes as number)
+    const fastest = withAvg.length ? Math.min(...withAvg) : null
+    const slowest = withAvg.length ? Math.max(...withAvg) : null
+    return { rows, fastest, slowest }
+  }, [data?.vehicle_performance])
+
+  const fmtUpdated = lastUpdated
+    ? new Intl.DateTimeFormat('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      }).format(lastUpdated)
+    : '—'
+
+  const totalTrendText = () => {
+    if (!hasPrev) return '—'
+    const d = metrics.deltaTotal
+    if (d === 0) return `No change vs ${data?.comparison_label ?? 'prior period'}`
+    if (d > 0) return `${Ic.up} ${d} vs ${data?.comparison_label ?? 'prior period'}`
+    return `${Ic.down} ${Math.abs(d)} vs ${data?.comparison_label ?? 'prior period'}`
+  }
+
+  const totalTrendClass = () => {
+    if (!hasPrev) return 'ops-kpi-sub--muted'
+    if (metrics.deltaTotal === 0) return 'ops-kpi-sub--neutral'
+    return metrics.deltaTotal > 0 ? 'ops-kpi-sub--bad' : 'ops-kpi-sub--good'
+  }
+
+  const resDonut = useMemo(() => {
+    const pct = metrics.resPct
+    if (pct == null) return []
+    return [
+      { name: 'Cleared', value: pct, fill: '#4ade80' },
+      { name: 'Other', value: Math.max(0, 100 - pct), fill: '#334155' },
+    ]
+  }, [metrics.resPct])
+
+  const exportPdf = () => window.print()
+
+  return (
+    <div className="ops-dashboard analytics-page--dark" id="ops-dashboard-print">
+      <header className="ops-topbar">
+        <div className="ops-topbar-left">
+          <h2 className="ops-title">REACH Operations — Live</h2>
+          <p className="ops-live-line">
+            <span className="ops-pulse-dot" aria-hidden />
+            Live — updates every 15s
+          </p>
+        </div>
+        <div className="ops-topbar-mid">
+          <div className="ops-period-toggle" role="tablist" aria-label="Time period">
+            {PERIOD_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                role="tab"
+                aria-selected={period === opt.id}
+                className={period === opt.id ? 'ops-period-btn ops-period-btn--active' : 'ops-period-btn'}
+                onClick={() => setPeriod(opt.id)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="ops-updated">Last updated: {fmtUpdated}</p>
+        </div>
+        <div className="ops-topbar-right">
+          <button type="button" className="ops-btn-pdf" onClick={exportPdf}>
+            Export PDF
+          </button>
+        </div>
+      </header>
+
+      {!data ? (
+        <p className="ops-loading">Loading operations dashboard…</p>
+      ) : (
+        <>
+          <section className="ops-kpi-row">
+            <article className="ops-kpi-card">
+              <div className="ops-kpi-head">
+                <span className="ops-kpi-ico" aria-hidden>{Ic.alert}</span>
+                <span className="ops-kpi-name">Total Incidents</span>
+              </div>
+              <div className="ops-kpi-num">{metrics.curN}</div>
+              <div className={`ops-kpi-sub ${totalTrendClass()}`}>{totalTrendText()}</div>
+            </article>
+
+            <article className="ops-kpi-card ops-kpi-card--split">
+              <div className="ops-kpi-head">
+                <span className="ops-kpi-ico" aria-hidden>{Ic.clock}</span>
+                <span className="ops-kpi-name">Avg Response</span>
+              </div>
+              <div className="ops-kpi-gauge-row">
+                <GaugeAvgResponse minutes={metrics.avgResp} />
+                <div className="ops-kpi-gauge-meta">
+                  <div className="ops-kpi-num ops-kpi-num--sm">{metrics.avgResp != null ? `${metrics.avgResp.toFixed(1)} min` : '—'}</div>
+                  <div className="ops-kpi-sub ops-kpi-sub--muted">
+                    {!hasPrev || metrics.avgResp == null || metrics.avgPrevResp == null
+                      ? '—'
+                      : metrics.avgResp < metrics.avgPrevResp
+                        ? `${Ic.down} vs ${data.comparison_label}`
+                        : metrics.avgResp > metrics.avgPrevResp
+                          ? `${Ic.up} vs ${data.comparison_label}`
+                          : `Flat vs ${data.comparison_label}`}
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article className="ops-kpi-card">
+              <div className="ops-kpi-head">
+                <span className="ops-kpi-ico" aria-hidden>{Ic.tick}</span>
+                <span className="ops-kpi-name">Resolution Rate</span>
+              </div>
+              <div className="ops-kpi-donut-row">
+                {metrics.resPct != null && resDonut.length > 0 ? (
+                  <div className="ops-mini-donut">
+                    <ResponsiveContainer width="100%" height={100}>
+                      <PieChart>
+                        <Pie data={resDonut} dataKey="value" innerRadius={28} outerRadius={40} paddingAngle={2} stroke="none">
+                          {resDonut.map((_, i) => (
+                            <Cell key={i} fill={resDonut[i].fill} />
+                          ))}
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : null}
+                <div>
+                  <div className="ops-kpi-num">{metrics.resPct != null ? `${metrics.resPct.toFixed(1)}%` : '—'}</div>
+                  <div className="ops-kpi-sub ops-kpi-sub--muted">
+                    {!hasPrev || metrics.resPct == null || metrics.resPrevPct == null
+                      ? '—'
+                      : metrics.resPct > metrics.resPrevPct
+                          ? `${Ic.up} vs ${data.comparison_label}`
+                        : metrics.resPct < metrics.resPrevPct
+                          ? `${Ic.down} vs ${data.comparison_label}`
+                          : `Flat vs ${data.comparison_label}`}
+                  </div>
+                </div>
+              </div>
+            </article>
+
+            <article className="ops-kpi-card">
+              <div className="ops-kpi-head">
+                <span className="ops-kpi-ico" aria-hidden>{Ic.masks}</span>
+                <span className="ops-kpi-name">Hoax Rate</span>
+                {metrics.hoaxPct != null && metrics.hoaxPct > 10 ? (
+                  <span className="ops-warn-ico" title="Above 10%">{Ic.warn}</span>
+                ) : null}
+              </div>
+              <div className="ops-kpi-num">{metrics.hoaxPct != null ? `${metrics.hoaxPct.toFixed(1)}%` : '—'}</div>
+              <div className="ops-kpi-sub ops-kpi-sub--muted">
+                {!hasPrev || metrics.hoaxPct == null || metrics.hoaxPrevPct == null
+                  ? '—'
+                  : metrics.hoaxPct < metrics.hoaxPrevPct
+                    ? `${Ic.down} vs ${data.comparison_label} (good)`
+                    : metrics.hoaxPct > metrics.hoaxPrevPct
+                      ? `${Ic.up} vs ${data.comparison_label}`
+                      : `Flat vs ${data.comparison_label}`}
+              </div>
+            </article>
+
+            <article className="ops-kpi-card">
+              <div className="ops-kpi-head">
+                <span className="ops-kpi-ico" aria-hidden>{Ic.ambulance}</span>
+                <span className="ops-kpi-name">Fleet Status</span>
+              </div>
+              <div className="ops-fleet-line">
+                <span className="ops-fleet-dot ops-fleet-dot--avail" /> {data.fleet.available} available
+                <span className="ops-fleet-dot ops-fleet-dot--disp" /> {data.fleet.dispatched} dispatched
+                <span className="ops-fleet-dot ops-fleet-dot--off" /> {data.fleet.offline} offline
+              </div>
+            </article>
+
+            <article className="ops-kpi-card">
+              <div className="ops-kpi-head">
+                <span className="ops-kpi-ico" aria-hidden>{Ic.pin}</span>
+                <span className="ops-kpi-name">Coverage</span>
+              </div>
+              <div className="ops-kpi-num ops-kpi-num--sm">
+                {data.coverage.active_corridors} active corridors · {data.coverage.km_monitored.toFixed(0)} km monitored
+              </div>
+            </article>
+          </section>
+
+          <section className="ops-panel ops-panel--map">
+            <div className="ops-panel-head">
+              <h3>Live corridor map</h3>
+              <p className="muted small">NH48 overview · incidents (warm) · ambulances (cool)</p>
+            </div>
+            <OpsLiveMap liveMap={liveMap} highlightVehicleId={highlightVehicleId} />
+          </section>
+
+          <div className="ops-chart-grid">
+            <section className="ops-panel">
+              <h3>Incidents by Type</h3>
+              {typeChartData.length === 0 ? (
+                <p className="ops-placeholder">Not enough data yet</p>
+              ) : (
+                <div className="ops-chart-tall">
+                  <ResponsiveContainer width="100%" height={320}>
+                    <PieChart>
+                      <Pie
+                        data={typeChartData}
+                        dataKey="value"
+                        nameKey="name"
+                        cx="50%"
+                        cy="50%"
+                        outerRadius={110}
+                        label={(p) => {
+                          const row = p as unknown as { name?: string; value?: number; pct?: number }
+                          return `${row.name ?? ''}: ${row.value ?? 0} (${row.pct ?? 0}%)`
+                        }}
+                      >
+                        {typeChartData.map((_, i) => (
+                          <Cell key={i} fill={TYPE_COLORS[i % TYPE_COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </section>
+
+            <section className="ops-panel">
+              <h3>Incidents by Hour of Day</h3>
+              {incidents.length === 0 ? (
+                <p className="ops-placeholder">Not enough data yet</p>
+              ) : (
+                <>
+                  {peakLabel ? <p className="ops-peak-label">{peakLabel}</p> : null}
+                  <div className="ops-chart-tall">
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={hourData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                        <XAxis dataKey="hour" tick={{ fill: '#94a3b8', fontSize: 10 }} interval={2} />
+                        <YAxis allowDecimals={false} tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155' }} />
+                        <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+                          {hourData.map((e, i) => (
+                            <Cell key={i} fill={e.top ? '#ef4444' : '#38bdf8'} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </>
+              )}
+            </section>
+          </div>
+
+          <div className="ops-chart-grid">
+            <section className="ops-panel">
+              <h3>Response Time Trend</h3>
+              {responseTrendData.length < 2 ? (
+                <p className="ops-placeholder">Not enough data yet</p>
+              ) : (
+                <div className="ops-chart-tall">
+                  <ResponsiveContainer width="100%" height={300}>
+                    <ComposedChart data={responseTrendData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <XAxis dataKey="n" tick={{ fill: '#94a3b8' }} label={{ value: 'Last incidents (chronological)', position: 'insideBottom', offset: -4, fill: '#64748b' }} />
+                      <YAxis tick={{ fill: '#94a3b8' }} label={{ value: 'Minutes', angle: -90, position: 'insideLeft', fill: '#64748b' }} />
+                      <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155' }} />
+                      <ReferenceArea
+                        y1={0}
+                        y2={8}
+                        fill="#22c55e"
+                        fillOpacity={0.12}
+                        ifOverflow="extendDomain"
+                      />
+                      <ReferenceArea y1={8} y2={Math.max(8, ...responseTrendData.map((d) => d.minutes)) + 2} fill="#ef4444" fillOpacity={0.08} ifOverflow="extendDomain" />
+                      <ReferenceLine y={8} stroke="#ef4444" strokeDasharray="4 4" label={{ value: '8 min target', fill: '#f87171', fontSize: 11 }} />
+                      <Line type="monotone" dataKey="minutes" stroke="#38bdf8" strokeWidth={2} dot={{ r: 4, fill: '#38bdf8' }} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </section>
+
+            <section className="ops-panel">
+              <h3>Dangerous Stretches</h3>
+              {!incidents.some((i) => i.km_marker != null) ? (
+                <p className="ops-placeholder">Not enough data yet</p>
+              ) : (
+                <div className="ops-chart-tall">
+                  <ResponsiveContainer width="100%" height={360}>
+                    <BarChart layout="vertical" data={stretchData} margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />
+                      <XAxis type="number" allowDecimals={false} tick={{ fill: '#94a3b8' }} />
+                      <YAxis type="category" dataKey="label" width={200} tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                      <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155' }} />
+                      <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+                        {stretchData.map((e, i) => (
+                          <Cell key={i} fill={e.fill} />
+                        ))}
+                        <LabelList dataKey="count" position="right" fill="#e2e8f0" fontSize={11} />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </section>
+          </div>
+
+          <section className="ops-panel ops-panel--table">
+            <h3>Vehicle &amp; driver performance</h3>
+            <p className="muted small">Sorted by average response (fastest first). Click a row to focus on the map.</p>
+            <div className="table-wrap">
+              <table className="ops-perf-table">
+                <thead>
+                  <tr>
+                    <th>Ambulance</th>
+                    <th>Driver</th>
+                    <th>Dispatches</th>
+                    <th>Avg response</th>
+                    <th>Best response</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {vehicleRowsSorted.rows.map((r) => {
+                    const isFast =
+                      r.avg_response_minutes != null &&
+                      vehicleRowsSorted.fastest != null &&
+                      r.avg_response_minutes === vehicleRowsSorted.fastest &&
+                      r.dispatch_count > 0
+                    const isSlow =
+                      r.avg_response_minutes != null &&
+                      vehicleRowsSorted.slowest != null &&
+                      r.avg_response_minutes === vehicleRowsSorted.slowest &&
+                      r.dispatch_count > 0 &&
+                      vehicleRowsSorted.rows.filter((x) => x.dispatch_count > 0).length > 1
+                    return (
+                      <tr
+                        key={r.vehicle_id}
+                        className={`${isFast ? 'ops-perf-row--fast' : ''} ${isSlow ? 'ops-perf-row--slow' : ''} ${highlightVehicleId === r.vehicle_id ? 'ops-perf-row--hi' : ''}`}
+                        onClick={() => setHighlightVehicleId(r.vehicle_id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            setHighlightVehicleId(r.vehicle_id)
+                          }
+                        }}
+                        tabIndex={0}
+                        role="button"
+                      >
+                        <td>{r.label}</td>
+                        <td>{r.driver_name ?? '—'}</td>
+                        <td>{r.dispatch_count}</td>
+                        <td>{r.avg_response_minutes != null ? `${r.avg_response_minutes.toFixed(1)} min` : '—'}</td>
+                        <td>{r.best_response_minutes != null ? `${r.best_response_minutes.toFixed(1)} min` : '—'}</td>
+                        <td>
+                          {r.on_scene_now ? (
+                            <span className="ops-onscene-badge">
+                              On scene now <span aria-hidden>{Ic.liveDot}</span>
+                            </span>
+                          ) : (
+                            r.status
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+              {vehicleRowsSorted.rows.length === 0 ? <p className="muted">No vehicles in fleet.</p> : null}
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  )
 }
 
 export type SpeedZoneRow = {
@@ -61,373 +928,6 @@ export type SpeedZoneRow = {
 }
 
 type CorridorRow = { id: string; name: string }
-
-function heatColor(ratio: number): string {
-  const t = Math.min(1, Math.max(0, ratio))
-  const h = 58 - t * 52
-  const l = 88 - t * 58
-  return `hsl(${h} 90% ${l}%)`
-}
-
-function IncidentHeatmap({ buckets }: { buckets: { segment_start_km: number; incident_count: number }[] }) {
-  const countBySeg = useMemo(() => {
-    const m = new Map<number, number>()
-    for (const b of buckets) m.set(b.segment_start_km, b.incident_count)
-    return m
-  }, [buckets])
-  const maxC = useMemo(() => Math.max(1, ...buckets.map((b) => b.incident_count), 1), [buckets])
-  const barW = (HW_W - 2 * HW_PAD) / N_SEG
-  return (
-    <svg className="analytics-heatmap-svg" viewBox={`0 0 ${HW_W} 88`} role="img" aria-label="Incident heatmap by 20 km">
-      <text x={HW_PAD} y={16} fill="#94a3b8" fontSize={12} fontWeight={600}>
-        0 km
-      </text>
-      <text x={HW_W - HW_PAD} y={16} textAnchor="end" fill="#94a3b8" fontSize={12} fontWeight={600}>
-        {NH48_KM} km
-      </text>
-      {Array.from({ length: N_SEG }, (_, i) => {
-        const startKm = i * SEG_KM
-        const cnt = countBySeg.get(startKm) ?? 0
-        const r = cnt / maxC
-        const x = HW_PAD + i * barW
-        return (
-          <g key={startKm}>
-            <rect
-              x={x + 1}
-              y={24}
-              width={barW - 2}
-              height={44}
-              rx={4}
-              fill={heatColor(r)}
-              stroke="#1e293b"
-              strokeWidth={1}
-            />
-            <text x={x + barW / 2} y={82} textAnchor="middle" fill="#cbd5e1" fontSize={9}>
-              {cnt > 0 ? cnt : ''}
-            </text>
-          </g>
-        )
-      })}
-    </svg>
-  )
-}
-
-function ResponseTrendChart({
-  points,
-}: {
-  points: { incident_id: string; reported_at: string; response_minutes: number }[]
-}) {
-  const sorted = useMemo(
-    () => [...points].sort((a, b) => +new Date(a.reported_at) - +new Date(b.reported_at)),
-    [points],
-  )
-  const W = 420
-  const H = 120
-  const pad = 16
-  const maxY = Math.max(1, ...sorted.map((p) => p.response_minutes), 1)
-  const pts = sorted.map((p, i) => {
-    const x = pad + (sorted.length <= 1 ? (W - 2 * pad) / 2 : (i / (sorted.length - 1)) * (W - 2 * pad))
-    const y = H - pad - (p.response_minutes / maxY) * (H - 2 * pad)
-    return `${x},${y}`
-  })
-  const line = pts.join(' ')
-  return (
-    <svg width={W} height={H} className="analytics-trend-svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Response time trend">
-      <polyline
-        fill="none"
-        stroke="#38bdf8"
-        strokeWidth={2}
-        points={line}
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-      {sorted.map((p, i) => {
-        const x = pad + (sorted.length <= 1 ? (W - 2 * pad) / 2 : (i / (sorted.length - 1)) * (W - 2 * pad))
-        const y = H - pad - (p.response_minutes / maxY) * (H - 2 * pad)
-        return <circle key={p.incident_id} cx={x} cy={y} r={4} fill="#0ea5e9" stroke="#0f172a" strokeWidth={1} />
-      })}
-    </svg>
-  )
-}
-
-function VehicleUtilizationBars({
-  rows,
-}: {
-  rows: { vehicle_label: string; dispatch_count: number }[]
-}) {
-  const max = Math.max(1, ...rows.map((r) => r.dispatch_count))
-  return (
-    <div className="analytics-bars">
-      {rows.map((r) => (
-        <div key={r.vehicle_label} className="analytics-bar-row">
-          <span className="analytics-bar-label">{r.vehicle_label}</span>
-          <div className="analytics-bar-track">
-            <div className="analytics-bar-fill" style={{ width: `${(r.dispatch_count / max) * 100}%` }} />
-          </div>
-          <span className="analytics-bar-num">{r.dispatch_count}</span>
-        </div>
-      ))}
-      {rows.length === 0 && <p className="muted">No dispatch data yet.</p>}
-    </div>
-  )
-}
-
-function TrendArrow({ trend }: { trend: KpiTrend }) {
-  const sym = trend.arrow === 'up' ? '↑' : trend.arrow === 'down' ? '↓' : '→'
-  return (
-    <span
-      className={`analytics-kpi-trend-ico ${trend.favorable ? 'analytics-kpi-trend-ico--good' : 'analytics-kpi-trend-ico--bad'}`}
-      title={trend.favorable ? 'Favorable trend' : 'Unfavorable trend'}
-      aria-hidden
-    >
-      {sym}
-    </span>
-  )
-}
-
-function formatIncidentDelta(delta: number, comparisonLabel: string) {
-  const abs = Math.abs(delta)
-  if (delta === 0) return `No change vs ${comparisonLabel}`
-  if (delta > 0) return `▲ ${abs} more than ${comparisonLabel}`
-  return `▼ ${abs} fewer than ${comparisonLabel}`
-}
-
-const PERIOD_OPTIONS: { id: AnalyticsPeriod; label: string }[] = [
-  { id: 'today', label: 'Today' },
-  { id: '7d', label: 'Last 7 days' },
-  { id: '30d', label: 'Last 30 days' },
-]
-
-export function AnalyticsPage({ token, onError }: { token: string; onError: (msg: string | null) => void }) {
-  const [period, setPeriod] = useState<AnalyticsPeriod>('7d')
-  const [data, setData] = useState<AdminAnalytics | null>(null)
-  const load = useCallback(async () => {
-    try {
-      setData(await fetchJson<AdminAnalytics>(`/admin/analytics?period=${encodeURIComponent(period)}`, token))
-      onError(null)
-    } catch (e: unknown) {
-      if (isSessionExpiredError(e)) return
-      onError(e instanceof Error ? e.message : 'Failed to load analytics')
-    }
-  }, [token, onError, period])
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  const k = data?.kpis
-
-  return (
-    <div className="analytics-page analytics-page--dark">
-      <header className="analytics-page-header">
-        <div className="analytics-page-header-text">
-          <h2>Analytics</h2>
-          <p className="muted intro">Operations metrics derived from incidents, dispatches, and live vehicles.</p>
-        </div>
-        <div className="analytics-period-toggle" role="tablist" aria-label="Time period">
-          {PERIOD_OPTIONS.map((opt) => (
-            <button
-              key={opt.id}
-              type="button"
-              role="tab"
-              aria-selected={period === opt.id}
-              className={period === opt.id ? 'analytics-period-btn analytics-period-btn--active' : 'analytics-period-btn'}
-              onClick={() => setPeriod(opt.id)}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </header>
-      {!data || !k ? (
-        <p className="analytics-loading">Loading…</p>
-      ) : (
-        <>
-          <div className="analytics-kpi-grid">
-            <article className="analytics-kpi-card">
-              <div className="analytics-kpi-card-top">
-                <span className="analytics-kpi-emoji" aria-hidden>
-                  🚨
-                </span>
-                <TrendArrow trend={k.total_incidents_trend} />
-              </div>
-              <div className="analytics-kpi-title">Total Incidents</div>
-              <div className="analytics-kpi-value">{k.total_incidents}</div>
-              <div
-                className={`analytics-kpi-delta ${
-                  k.total_incidents_delta === 0
-                    ? 'analytics-kpi-delta--neutral'
-                    : k.total_incidents_trend.favorable
-                      ? 'analytics-kpi-delta--good'
-                      : 'analytics-kpi-delta--bad'
-                }`}
-              >
-                {formatIncidentDelta(k.total_incidents_delta, data.comparison_label)}
-              </div>
-            </article>
-
-            <article className="analytics-kpi-card">
-              <div className="analytics-kpi-card-top">
-                <span className="analytics-kpi-emoji" aria-hidden>
-                  ⏱️
-                </span>
-                <TrendArrow trend={k.avg_response_time_trend} />
-              </div>
-              <div className="analytics-kpi-title">Avg Response Time</div>
-              <div className="analytics-kpi-value-row">
-                <span className="analytics-kpi-value">
-                  {k.avg_response_time_minutes != null ? k.avg_response_time_minutes.toFixed(1) : '—'}
-                  {k.avg_response_time_minutes != null ? <span className="analytics-kpi-unit">min</span> : null}
-                </span>
-                <span
-                  className={`analytics-kpi-target-badge ${
-                    k.avg_response_time_minutes == null
-                      ? 'analytics-kpi-target-badge--na'
-                      : k.response_time_under_target
-                        ? 'analytics-kpi-target-badge--ok'
-                        : 'analytics-kpi-target-badge--bad'
-                  }`}
-                >
-                  Target: &lt;8 min
-                </span>
-              </div>
-            </article>
-
-            <article className="analytics-kpi-card">
-              <div className="analytics-kpi-card-top">
-                <span className="analytics-kpi-emoji" aria-hidden>
-                  ✅
-                </span>
-                <TrendArrow trend={k.resolution_rate_trend} />
-              </div>
-              <div className="analytics-kpi-title">Resolution Rate</div>
-              <div className="analytics-kpi-value">
-                {k.resolution_rate_pct != null ? `${k.resolution_rate_pct.toFixed(1)}` : '—'}
-                {k.resolution_rate_pct != null ? <span className="analytics-kpi-unit">%</span> : null}
-              </div>
-              <p className="analytics-kpi-hint">Cleared (closed/archived), not expired</p>
-            </article>
-
-            <article className="analytics-kpi-card">
-              <div className="analytics-kpi-card-top">
-                <span className="analytics-kpi-emoji" aria-hidden>
-                  🎭
-                </span>
-                <TrendArrow trend={k.hoax_rate_trend} />
-              </div>
-              <div className="analytics-kpi-title">Hoax Rate</div>
-              <div className="analytics-kpi-value">
-                {k.hoax_rate_pct != null ? `${k.hoax_rate_pct.toFixed(1)}` : '—'}
-                {k.hoax_rate_pct != null ? <span className="analytics-kpi-unit">%</span> : null}
-              </div>
-              <p className="analytics-kpi-hint">Incidents marked recalled (hoax)</p>
-            </article>
-
-            <article className="analytics-kpi-card">
-              <div className="analytics-kpi-card-top">
-                <span className="analytics-kpi-emoji" aria-hidden>
-                  🚑
-                </span>
-                <TrendArrow trend={k.ambulances_trend} />
-              </div>
-              <div className="analytics-kpi-title">Ambulances Active</div>
-              <div className="analytics-kpi-value analytics-kpi-value--sm">
-                {k.ambulances_on_duty} <span className="analytics-kpi-of">of</span> {k.ambulances_total}
-              </div>
-              <p className="analytics-kpi-hint">On duty now</p>
-            </article>
-
-            <article className="analytics-kpi-card">
-              <div className="analytics-kpi-card-top">
-                <span className="analytics-kpi-emoji" aria-hidden>
-                  📱
-                </span>
-                <TrendArrow trend={k.sos_source_trend} />
-              </div>
-              <div className="analytics-kpi-title">SOS Source</div>
-              <ul className="analytics-kpi-sos-list">
-                <li>
-                  <span className="analytics-kpi-sos-label">App</span>
-                  <span className="analytics-kpi-sos-num">{k.sos_app}</span>
-                </li>
-                <li>
-                  <span className="analytics-kpi-sos-label">SMS</span>
-                  <span className="analytics-kpi-sos-num">{k.sos_sms}</span>
-                </li>
-                <li>
-                  <span className="analytics-kpi-sos-label">Auto</span>
-                  <span className="analytics-kpi-sos-num">{k.sos_auto}</span>
-                </li>
-              </ul>
-            </article>
-          </div>
-
-          <div className="analytics-grid">
-          <section className="analytics-card analytics-card--below-kpis">
-            <h3>Response time</h3>
-            <p className="muted small">Average minutes from incident reported to first dispatch ({PERIOD_OPTIONS.find((o) => o.id === period)?.label})</p>
-            <div className="analytics-big-num">
-              {data.avg_response_time_minutes != null ? data.avg_response_time_minutes.toFixed(1) : '—'}
-              <span className="unit">min</span>
-            </div>
-            <div className="analytics-sub">
-              <h4>Last 20 dispatched (trend)</h4>
-              {data.response_time_last_20.length > 0 ? (
-                <ResponseTrendChart points={data.response_time_last_20} />
-              ) : (
-                <p className="muted">Not enough data.</p>
-              )}
-            </div>
-          </section>
-
-          <section className="analytics-card">
-            <h3>Incident heatmap</h3>
-            <p className="muted small">Count per {SEG_KM} km segment (light → dark = more incidents)</p>
-            <IncidentHeatmap buckets={data.heatmap_buckets} />
-          </section>
-
-          <section className="analytics-card">
-            <h3>Vehicle utilization</h3>
-            <p className="muted small">Total dispatches per ambulance</p>
-            <VehicleUtilizationBars rows={data.vehicle_dispatch_counts} />
-          </section>
-
-          <section className="analytics-card analytics-card-wide">
-            <h3>Active duty</h3>
-            <p className="muted small">Drivers with assigned vehicles and last GPS update</p>
-            <div className="table-wrap">
-              <table className="analytics-duty-table">
-                <thead>
-                  <tr>
-                    <th>Driver</th>
-                    <th>Phone</th>
-                    <th>Vehicle</th>
-                    <th>Status</th>
-                    <th>On call</th>
-                    <th>Last GPS</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.active_drivers.map((d) => (
-                    <tr key={`${d.phone}-${d.vehicle_label}`}>
-                      <td>{d.driver_name}</td>
-                      <td>{d.phone}</td>
-                      <td>{d.vehicle_label}</td>
-                      <td>{d.vehicle_status}</td>
-                      <td>{d.on_active_call ? 'Yes' : '—'}</td>
-                      <td>{d.last_gps_at ? new Date(d.last_gps_at).toLocaleString() : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {data.active_drivers.length === 0 && <p className="muted">No drivers with assigned vehicles.</p>}
-            </div>
-          </section>
-        </div>
-        </>
-      )}
-    </div>
-  )
-}
 
 export function BroadcastPage({
   token,
@@ -462,7 +962,7 @@ export function BroadcastPage({
       <h2>Broadcast</h2>
       <p className="muted intro">
         Send a message to all connected driver apps (Socket.IO). Drivers get a dispatch notification panel with sender and time;
-        optional priority (🔴 Urgent / 🟡 Info).
+        optional priority ({Ic.urgentLbl} Urgent / {Ic.infoLbl} Info).
       </p>
       <form className="form-panel broadcast-form" onSubmit={(e) => void submit(e)}>
         <label>
@@ -479,8 +979,8 @@ export function BroadcastPage({
           Priority (optional)
           <select value={priority} onChange={(e) => setPriority(e.target.value as 'urgent' | 'info' | '')}>
             <option value="">None</option>
-            <option value="urgent">🔴 Urgent</option>
-            <option value="info">🟡 Info</option>
+            <option value="urgent">{Ic.urgentLbl} Urgent</option>
+            <option value="info">{Ic.infoLbl} Info</option>
           </select>
         </label>
         <button type="submit" disabled={sending || !msg.trim()}>
