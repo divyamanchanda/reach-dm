@@ -2088,6 +2088,55 @@ tr:last-child td {
   min-height: 280px;
 }
 
+/* Incidents by Type: donut ≥300px diameter (outerRadius 150) + legend */
+.ops-incidents-type-chart {
+  width: 100%;
+  min-height: 420px;
+}
+
+.ops-incidents-type-chart .recharts-responsive-container {
+  min-height: 380px;
+}
+
+.ops-type-pie-legend {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 0.5rem 1.25rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.ops-type-pie-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+}
+
+.ops-type-pie-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.35);
+}
+
+.ops-type-pie-legend-label {
+  color: #e2e8f0;
+}
+
+.ops-type-pie-legend-meta {
+  font-variant-numeric: tabular-nums;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
 .ops-peak-label {
   margin: 0 0 0.5rem;
   font-size: 0.85rem;

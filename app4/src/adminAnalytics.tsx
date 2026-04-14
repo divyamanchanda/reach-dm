@@ -10,7 +10,6 @@ import {
   Cell,
   ComposedChart,
   LabelList,
-  Legend,
   Line,
   Pie,
   PieChart,
@@ -260,11 +259,19 @@ const TYPE_LABEL: Record<string, string> = {
   medical_emergency: 'Medical Emergency',
   breakdown: 'Breakdown',
   fire: 'Fire',
-  obstacle_on_road: 'Obstacle',
+  obstacle_on_road: 'Obstacle on road',
   other: 'Other',
 }
 
-const TYPE_COLORS = ['#38bdf8', '#a78bfa', '#f472b6', '#fb923c', '#4ade80', '#94a3b8']
+/** Distinct fills for Incidents by Type donut (exact hex per product spec). */
+const TYPE_FILL: Record<string, string> = {
+  accident: '#FF2D2D',
+  medical_emergency: '#FF6B00',
+  breakdown: '#3B82F6',
+  fire: '#F59E0B',
+  obstacle_on_road: '#8B5CF6',
+  other: '#6B7280',
+}
 
 function bucketIncidentType(raw: string): string {
   const k = raw.toLowerCase()
@@ -556,6 +563,7 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
     return rows.map((r) => ({
       ...r,
       pct: sum ? Math.round((1000 * r.value) / sum) / 10 : 0,
+      fill: TYPE_FILL[r.key] ?? TYPE_FILL.other,
     }))
   }, [incidents])
 
@@ -864,29 +872,73 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
               {typeChartData.length === 0 ? (
                 <p className="ops-placeholder">Not enough data yet</p>
               ) : (
-                <div className="ops-chart-tall">
-                  <ResponsiveContainer width="100%" height={320}>
-                    <PieChart>
+                <div className="ops-incidents-type-chart">
+                  <ResponsiveContainer width="100%" minHeight={380} height={380}>
+                    <PieChart margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
                       <Pie
                         data={typeChartData}
                         dataKey="value"
                         nameKey="name"
                         cx="50%"
                         cy="50%"
-                        outerRadius={110}
-                        label={(p) => {
-                          const row = p as unknown as { name?: string; value?: number; pct?: number }
-                          return `${row.name ?? ''}: ${row.value ?? 0} (${row.pct ?? 0}%)`
+                        innerRadius={95}
+                        outerRadius={150}
+                        paddingAngle={1.5}
+                        stroke="#0f172a"
+                        strokeWidth={2}
+                        labelLine={{ stroke: '#64748b', strokeWidth: 1 }}
+                        label={(props) => {
+                          const { name, value, percent, x, y, textAnchor } = props as {
+                            name?: string
+                            value?: number
+                            percent?: number
+                            x?: number
+                            y?: number
+                            textAnchor?: 'start' | 'middle' | 'end' | 'inherit'
+                          }
+                          const pct = percent != null ? (percent * 100).toFixed(1) : '0'
+                          const text = `${name ?? ''}: ${value ?? 0} (${pct}%)`
+                          if (x == null || y == null) return text
+                          return (
+                            <text
+                              x={x}
+                              y={y}
+                              textAnchor={textAnchor ?? 'middle'}
+                              fill="#e2e8f0"
+                              fontSize={11}
+                              fontWeight={600}
+                            >
+                              {text}
+                            </text>
+                          )
                         }}
                       >
-                        {typeChartData.map((_, i) => (
-                          <Cell key={i} fill={TYPE_COLORS[i % TYPE_COLORS.length]} />
+                        {typeChartData.map((d) => (
+                          <Cell key={d.key} fill={d.fill} />
                         ))}
                       </Pie>
-                      <Tooltip />
-                      <Legend />
+                      <Tooltip
+                        contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8 }}
+                        labelStyle={{ color: '#e2e8f0' }}
+                        formatter={(value, _name, item) => {
+                          const p = item.payload as { pct?: number; name?: string }
+                          const n = typeof value === 'number' ? value : Number(value)
+                          return [`${n} (${p.pct ?? 0}%)`, p.name ?? 'Type']
+                        }}
+                      />
                     </PieChart>
                   </ResponsiveContainer>
+                  <ul className="ops-type-pie-legend" aria-label="Incident types legend">
+                    {typeChartData.map((d) => (
+                      <li key={d.key}>
+                        <span className="ops-type-pie-swatch" style={{ backgroundColor: d.fill }} aria-hidden />
+                        <span className="ops-type-pie-legend-label">{d.name}</span>
+                        <span className="ops-type-pie-legend-meta">
+                          {d.value} · {d.pct}%
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
             </section>
