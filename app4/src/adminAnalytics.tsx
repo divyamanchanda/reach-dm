@@ -100,6 +100,7 @@ export type AnalyticsIncidentRow = {
   latitude: number | null
   longitude: number | null
   first_response_minutes: number | null
+  time_to_scene_minutes: number | null
 }
 
 export type AdminAnalytics = {
@@ -360,9 +361,9 @@ function OpsLiveMap({
   )
 }
 
-function GaugeAvgResponse({ minutes }: { minutes: number | null }) {
+function GaugeAvgResponse({ minutes, compact }: { minutes: number | null; compact?: boolean }) {
   if (minutes == null) {
-    return <div className="ops-gauge-empty">—</div>
+    return <div className={`ops-gauge-empty ${compact ? 'ops-gauge-empty--compact' : ''}`}>—</div>
   }
   const maxM = 30
   const pct = Math.min(100, (minutes / maxM) * 100)
@@ -370,12 +371,26 @@ function GaugeAvgResponse({ minutes }: { minutes: number | null }) {
   if (minutes > 15) col = '#ef4444'
   else if (minutes >= 8) col = '#f59e0b'
   const data = [{ name: 'r', value: pct, fill: col }]
+  const dim = compact ? 88 : 112
+  const c = dim / 2
+  const inner = compact ? 24 : 32
+  const outer = compact ? 38 : 48
   return (
-    <div className="ops-gauge-wrap">
-      <RadialBarChart width={112} height={112} cx={56} cy={56} innerRadius={32} outerRadius={48} data={data} startAngle={90} endAngle={-270}>
+    <div className={`ops-gauge-wrap ${compact ? 'ops-gauge-wrap--compact' : ''}`}>
+      <RadialBarChart
+        width={dim}
+        height={dim}
+        cx={c}
+        cy={c}
+        innerRadius={inner}
+        outerRadius={outer}
+        data={data}
+        startAngle={90}
+        endAngle={-270}
+      >
         <RadialBar dataKey="value" cornerRadius={6} background={{ fill: '#1e293b' }} />
       </RadialBarChart>
-      <span className="ops-gauge-center">{minutes.toFixed(1)}</span>
+      <span className={`ops-gauge-center ${compact ? 'ops-gauge-center--compact' : ''}`}>{minutes.toFixed(1)}</span>
     </div>
   )
 }
@@ -429,10 +444,10 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
     const prevN = prevIncidents.length
     const deltaTotal = curN - prevN
 
-    const respVals = incidents.map((i) => i.first_response_minutes).filter((x): x is number => x != null)
-    const avgResp = mean(respVals)
+    const sceneVals = incidents.map((i) => i.time_to_scene_minutes).filter((x): x is number => x != null)
+    const avgResp = mean(sceneVals)
 
-    const prevRespVals = prevIncidents.map((i) => i.first_response_minutes).filter((x): x is number => x != null)
+    const prevRespVals = prevIncidents.map((i) => i.time_to_scene_minutes).filter((x): x is number => x != null)
     const avgPrevResp = mean(prevRespVals)
 
     const resPct = resolutionRatePct(incidents)
@@ -491,13 +506,13 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
 
   const responseTrendData = useMemo(() => {
     const withResp = incidents
-      .filter((i) => i.first_response_minutes != null)
+      .filter((i) => i.time_to_scene_minutes != null)
       .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
       .slice(0, 10)
       .reverse()
       .map((i, idx) => ({
         n: idx + 1,
-        minutes: i.first_response_minutes as number,
+        minutes: i.time_to_scene_minutes as number,
         label: `#${idx + 1}`,
       }))
     return withResp
@@ -623,27 +638,31 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
                 <span className="ops-kpi-ico" aria-hidden>{Ic.alert}</span>
                 <span className="ops-kpi-name">Total Incidents</span>
               </div>
-              <div className="ops-kpi-num">{metrics.curN}</div>
-              <div className={`ops-kpi-sub ${totalTrendClass()}`}>{totalTrendText()}</div>
+              <div className="ops-kpi-body">
+                <div className="ops-kpi-num">{metrics.curN}</div>
+                <div className={`ops-kpi-sub ${totalTrendClass()}`}>{totalTrendText()}</div>
+              </div>
             </article>
 
-            <article className="ops-kpi-card ops-kpi-card--split">
+            <article className="ops-kpi-card">
               <div className="ops-kpi-head">
                 <span className="ops-kpi-ico" aria-hidden>{Ic.clock}</span>
-                <span className="ops-kpi-name">Avg Response</span>
+                <span className="ops-kpi-name">Avg time to scene</span>
               </div>
-              <div className="ops-kpi-gauge-row">
-                <GaugeAvgResponse minutes={metrics.avgResp} />
-                <div className="ops-kpi-gauge-meta">
-                  <div className="ops-kpi-num ops-kpi-num--sm">{metrics.avgResp != null ? `${metrics.avgResp.toFixed(1)} min` : '—'}</div>
-                  <div className="ops-kpi-sub ops-kpi-sub--muted">
-                    {!hasPrev || metrics.avgResp == null || metrics.avgPrevResp == null
-                      ? '—'
-                      : metrics.avgResp < metrics.avgPrevResp
-                        ? `${Ic.down} vs ${data.comparison_label}`
-                        : metrics.avgResp > metrics.avgPrevResp
-                          ? `${Ic.up} vs ${data.comparison_label}`
-                          : `Flat vs ${data.comparison_label}`}
+              <div className="ops-kpi-body">
+                <div className="ops-kpi-gauge-row">
+                  <GaugeAvgResponse minutes={metrics.avgResp} compact />
+                  <div className="ops-kpi-gauge-meta">
+                    <div className="ops-kpi-num ops-kpi-num--sm">{metrics.avgResp != null ? `${metrics.avgResp.toFixed(1)} min` : '—'}</div>
+                    <div className="ops-kpi-sub ops-kpi-sub--muted">
+                      {!hasPrev || metrics.avgResp == null || metrics.avgPrevResp == null
+                        ? '—'
+                        : metrics.avgResp < metrics.avgPrevResp
+                          ? `${Ic.down} vs ${data.comparison_label}`
+                          : metrics.avgResp > metrics.avgPrevResp
+                            ? `${Ic.up} vs ${data.comparison_label}`
+                            : `Flat vs ${data.comparison_label}`}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -654,27 +673,34 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
                 <span className="ops-kpi-ico" aria-hidden>{Ic.tick}</span>
                 <span className="ops-kpi-name">Resolution Rate</span>
               </div>
-              <div className="ops-kpi-donut-row">
-                {metrics.resPct != null && resDonut.length > 0 ? (
-                  <div className="ops-mini-donut">
-                    <ResponsiveContainer width="100%" height={100}>
-                      <PieChart>
-                        <Pie data={resDonut} dataKey="value" innerRadius={28} outerRadius={40} paddingAngle={2} stroke="none">
+              <div className="ops-kpi-body">
+                <div className="ops-kpi-resolution">
+                  {metrics.resPct != null && resDonut.length > 0 ? (
+                    <div className="ops-mini-donut">
+                      <PieChart width={60} height={60}>
+                        <Pie
+                          data={resDonut}
+                          dataKey="value"
+                          cx={30}
+                          cy={30}
+                          innerRadius={14}
+                          outerRadius={26}
+                          paddingAngle={2}
+                          stroke="none"
+                        >
                           {resDonut.map((_, i) => (
                             <Cell key={i} fill={resDonut[i].fill} />
                           ))}
                         </Pie>
                       </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                ) : null}
-                <div>
-                  <div className="ops-kpi-num">{metrics.resPct != null ? `${metrics.resPct.toFixed(1)}%` : '—'}</div>
-                  <div className="ops-kpi-sub ops-kpi-sub--muted">
+                    </div>
+                  ) : null}
+                  <div className="ops-kpi-resolution-pct">{metrics.resPct != null ? `${metrics.resPct.toFixed(1)}%` : '—'}</div>
+                  <div className="ops-kpi-sub ops-kpi-sub--muted ops-kpi-resolution-trend">
                     {!hasPrev || metrics.resPct == null || metrics.resPrevPct == null
                       ? '—'
                       : metrics.resPct > metrics.resPrevPct
-                          ? `${Ic.up} vs ${data.comparison_label}`
+                        ? `${Ic.up} vs ${data.comparison_label}`
                         : metrics.resPct < metrics.resPrevPct
                           ? `${Ic.down} vs ${data.comparison_label}`
                           : `Flat vs ${data.comparison_label}`}
@@ -691,15 +717,17 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
                   <span className="ops-warn-ico" title="Above 10%">{Ic.warn}</span>
                 ) : null}
               </div>
-              <div className="ops-kpi-num">{metrics.hoaxPct != null ? `${metrics.hoaxPct.toFixed(1)}%` : '—'}</div>
-              <div className="ops-kpi-sub ops-kpi-sub--muted">
-                {!hasPrev || metrics.hoaxPct == null || metrics.hoaxPrevPct == null
-                  ? '—'
-                  : metrics.hoaxPct < metrics.hoaxPrevPct
-                    ? `${Ic.down} vs ${data.comparison_label} (good)`
-                    : metrics.hoaxPct > metrics.hoaxPrevPct
-                      ? `${Ic.up} vs ${data.comparison_label}`
-                      : `Flat vs ${data.comparison_label}`}
+              <div className="ops-kpi-body">
+                <div className="ops-kpi-num">{metrics.hoaxPct != null ? `${metrics.hoaxPct.toFixed(1)}%` : '—'}</div>
+                <div className="ops-kpi-sub ops-kpi-sub--muted">
+                  {!hasPrev || metrics.hoaxPct == null || metrics.hoaxPrevPct == null
+                    ? '—'
+                    : metrics.hoaxPct < metrics.hoaxPrevPct
+                      ? `${Ic.down} vs ${data.comparison_label} (good)`
+                      : metrics.hoaxPct > metrics.hoaxPrevPct
+                        ? `${Ic.up} vs ${data.comparison_label}`
+                        : `Flat vs ${data.comparison_label}`}
+                </div>
               </div>
             </article>
 
@@ -708,10 +736,27 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
                 <span className="ops-kpi-ico" aria-hidden>{Ic.ambulance}</span>
                 <span className="ops-kpi-name">Fleet Status</span>
               </div>
-              <div className="ops-fleet-line">
-                <span className="ops-fleet-dot ops-fleet-dot--avail" /> {data.fleet.available} available
-                <span className="ops-fleet-dot ops-fleet-dot--disp" /> {data.fleet.dispatched} dispatched
-                <span className="ops-fleet-dot ops-fleet-dot--off" /> {data.fleet.offline} offline
+              <div className="ops-kpi-body">
+                <div className="ops-fleet-stack">
+                  <div className="ops-fleet-row">
+                    <span className="ops-fleet-dot ops-fleet-dot--avail" aria-hidden />
+                    <span>
+                      {data.fleet.available} available
+                    </span>
+                  </div>
+                  <div className="ops-fleet-row">
+                    <span className="ops-fleet-dot ops-fleet-dot--disp" aria-hidden />
+                    <span>
+                      {data.fleet.dispatched} dispatched
+                    </span>
+                  </div>
+                  <div className="ops-fleet-row">
+                    <span className="ops-fleet-dot ops-fleet-dot--off" aria-hidden />
+                    <span>
+                      {data.fleet.offline} offline
+                    </span>
+                  </div>
+                </div>
               </div>
             </article>
 
@@ -720,8 +765,14 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
                 <span className="ops-kpi-ico" aria-hidden>{Ic.pin}</span>
                 <span className="ops-kpi-name">Coverage</span>
               </div>
-              <div className="ops-kpi-num ops-kpi-num--sm">
-                {data.coverage.active_corridors} active corridors · {data.coverage.km_monitored.toFixed(0)} km monitored
+              <div className="ops-kpi-body">
+                <div className="ops-kpi-coverage-lines">
+                  <div className="ops-kpi-coverage-line1">
+                    {data.coverage.active_corridors}{' '}
+                    {data.coverage.active_corridors === 1 ? 'active corridor' : 'active corridors'}
+                  </div>
+                  <div className="ops-kpi-coverage-line2">{data.coverage.km_monitored.toFixed(0)} km monitored</div>
+                </div>
               </div>
             </article>
           </section>
@@ -796,7 +847,7 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
 
           <div className="ops-chart-grid">
             <section className="ops-panel">
-              <h3>Response Time Trend</h3>
+              <h3>Time to scene (recent incidents)</h3>
               {responseTrendData.length < 2 ? (
                 <p className="ops-placeholder">Not enough data yet</p>
               ) : (

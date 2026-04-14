@@ -86,7 +86,12 @@ def _analytics_incident_rows(db: Session, start: datetime, end: datetime) -> lis
             """
             SELECT i.id, i.incident_type, i.severity, i.status, i.created_at, i.km_marker, i.lat, i.lng,
               (SELECT EXTRACT(EPOCH FROM (MIN(d.created_at) - i.created_at)) / 60.0
-               FROM dispatches d WHERE d.incident_id = i.id) AS resp_min
+               FROM dispatches d WHERE d.incident_id = i.id) AS resp_min,
+              (SELECT EXTRACT(EPOCH FROM (MIN(ie.created_at) - i.created_at)) / 60.0
+               FROM incident_events ie
+               WHERE ie.incident_id = i.id
+                 AND ie.event_type = 'status_change'
+                 AND LOWER(COALESCE(ie.payload->>'status', '')) = 'on_scene') AS scene_min
             FROM incidents i
             WHERE i.created_at >= :start AND i.created_at < :end
             ORDER BY i.created_at ASC
@@ -95,8 +100,9 @@ def _analytics_incident_rows(db: Session, start: datetime, end: datetime) -> lis
         {"start": start, "end": end},
     ).fetchall()
     out: list[AnalyticsIncidentRowOut] = []
-    for rid, itype, sev, st, created, km, la, ln, resp in rows:
+    for rid, itype, sev, st, created, km, la, ln, resp, scene in rows:
         rm = round(float(resp), 2) if resp is not None else None
+        sm = round(float(scene), 2) if scene is not None else None
         out.append(
             AnalyticsIncidentRowOut(
                 id=rid,
@@ -108,6 +114,7 @@ def _analytics_incident_rows(db: Session, start: datetime, end: datetime) -> lis
                 latitude=float(la) if la is not None else None,
                 longitude=float(ln) if ln is not None else None,
                 first_response_minutes=rm,
+                time_to_scene_minutes=sm,
             )
         )
     return out

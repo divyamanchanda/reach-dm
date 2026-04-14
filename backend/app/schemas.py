@@ -388,7 +388,10 @@ class AnalyticsIncidentRowOut(BaseModel):
     km_marker: float | None
     latitude: float | None
     longitude: float | None
+    # Minutes from incident created to first dispatch record (legacy / vehicle performance SQL).
     first_response_minutes: float | None
+    # Minutes from incident created to first on_scene status_change event, if recorded.
+    time_to_scene_minutes: float | None
 
 
 class AdminAnalyticsFleetOut(BaseModel):

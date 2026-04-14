@@ -1685,22 +1685,54 @@ tr:last-child td {
 
 .ops-kpi-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-auto-rows: 168px;
   gap: 0.85rem;
   margin-bottom: 1.25rem;
+  align-items: stretch;
+}
+
+@media (max-width: 1200px) {
+  .ops-kpi-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .ops-kpi-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: 160px;
+  }
+}
+
+@media (max-width: 380px) {
+  .ops-kpi-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .ops-kpi-card {
   position: relative;
-  padding: 1rem 1rem 1.1rem;
+  box-sizing: border-box;
+  min-height: 0;
+  height: 100%;
+  padding: 0.75rem 0.85rem 0.85rem;
   border-radius: 12px;
   background: linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.88));
   border: 1px solid rgba(51, 65, 85, 0.75);
   box-shadow: 0 0 18px var(--ops-glow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.ops-kpi-card--split {
-  grid-column: span 1;
+.ops-kpi-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  overflow: hidden;
 }
 
 .ops-kpi-head {
@@ -1767,7 +1799,9 @@ tr:last-child td {
 .ops-kpi-gauge-row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  flex: 1;
+  min-height: 0;
 }
 
 .ops-kpi-gauge-meta {
@@ -1782,6 +1816,11 @@ tr:last-child td {
   flex-shrink: 0;
 }
 
+.ops-gauge-wrap--compact {
+  width: 88px;
+  height: 88px;
+}
+
 .ops-gauge-center {
   position: absolute;
   left: 50%;
@@ -1791,6 +1830,10 @@ tr:last-child td {
   font-weight: 800;
   color: #e2e8f0;
   pointer-events: none;
+}
+
+.ops-gauge-center--compact {
+  font-size: 0.82rem;
 }
 
 .ops-gauge-empty {
@@ -1803,49 +1846,111 @@ tr:last-child td {
   font-weight: 700;
 }
 
-.ops-kpi-donut-row {
+.ops-gauge-empty--compact {
+  height: 88px;
+  font-size: 1.25rem;
+}
+
+.ops-kpi-resolution {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 0.75rem;
+  justify-content: flex-start;
+  gap: 0.2rem;
+  flex: 1;
+  min-height: 0;
+  text-align: center;
+  padding-top: 0.1rem;
 }
 
 .ops-mini-donut {
-  width: 100px;
-  height: 100px;
+  width: 60px;
+  height: 60px;
   flex-shrink: 0;
 }
 
-.ops-fleet-line {
+.ops-kpi-resolution-pct {
+  font-size: 1.45rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #f8fafc;
+  line-height: 1.1;
+}
+
+.ops-kpi-resolution-trend {
+  margin-top: 0;
+  font-size: 0.7rem;
+  line-height: 1.25;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ops-fleet-stack {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 0.75rem;
-  font-size: 0.88rem;
+  flex-direction: column;
+  gap: 0.28rem;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+  font-size: 0.74rem;
   font-weight: 600;
   color: #cbd5e1;
+  line-height: 1.25;
+}
+
+.ops-fleet-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
 }
 
 .ops-fleet-dot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
+  display: block;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  margin-right: 0.2rem;
-  vertical-align: middle;
+  flex-shrink: 0;
 }
 
 .ops-fleet-dot--avail {
-  background: #0ea5e9;
-  box-shadow: 0 0 8px rgba(14, 165, 233, 0.5);
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.45);
 }
 
 .ops-fleet-dot--disp {
-  background: #8b5cf6;
-  box-shadow: 0 0 8px rgba(139, 92, 246, 0.45);
+  background: #a855f7;
+  box-shadow: 0 0 6px rgba(168, 85, 247, 0.45);
 }
 
 .ops-fleet-dot--off {
   background: #64748b;
+  box-shadow: none;
+}
+
+.ops-kpi-coverage-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+}
+
+.ops-kpi-coverage-line1 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #f8fafc;
+  line-height: 1.2;
+}
+
+.ops-kpi-coverage-line2 {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #94a3b8;
+  line-height: 1.2;
 }
 
 .ops-panel {
