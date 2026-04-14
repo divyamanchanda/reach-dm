@@ -241,6 +241,46 @@ function mean(nums: number[]): number | null {
   return nums.reduce((a, b) => a + b, 0) / nums.length
 }
 
+type ResponseTimeKpiMode = 'scene' | 'dispatch' | 'none'
+
+/**
+ * KPI: prefer mean(created → on_scene) when ≥50% of incidents in the window have on_scene timing;
+ * otherwise mean(created → first dispatch) when any dispatch exists.
+ */
+function responseTimeKpiForPeriod(incidents: AnalyticsIncidentRow[]): {
+  mode: ResponseTimeKpiMode
+  avg: number | null
+} {
+  const n = incidents.length
+  const sceneVals = incidents.map((i) => i.time_to_scene_minutes).filter((x): x is number => x != null)
+  const dispatchVals = incidents.map((i) => i.first_response_minutes).filter((x): x is number => x != null)
+  if (n === 0) return { mode: 'none', avg: null }
+
+  const sceneShare = sceneVals.length / n
+  if (sceneVals.length > 0 && sceneShare >= 0.5) {
+    return { mode: 'scene', avg: mean(sceneVals) }
+  }
+  if (dispatchVals.length > 0) {
+    return { mode: 'dispatch', avg: mean(dispatchVals) }
+  }
+  return { mode: 'none', avg: null }
+}
+
+function priorPeriodAverageForMode(
+  prevIncidents: AnalyticsIncidentRow[],
+  mode: ResponseTimeKpiMode,
+): number | null {
+  if (mode === 'scene') {
+    const v = prevIncidents.map((i) => i.time_to_scene_minutes).filter((x): x is number => x != null)
+    return mean(v)
+  }
+  if (mode === 'dispatch') {
+    const v = prevIncidents.map((i) => i.first_response_minutes).filter((x): x is number => x != null)
+    return mean(v)
+  }
+  return null
+}
+
 function resolutionRatePct(incidents: AnalyticsIncidentRow[]): number | null {
   if (incidents.length === 0) return null
   const cleared = incidents.filter((i) => ['closed', 'archived'].includes(i.status.toLowerCase())).length
@@ -524,11 +564,10 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
     const prevN = prevIncidents.length
     const deltaTotal = curN - prevN
 
-    const sceneVals = incidents.map((i) => i.time_to_scene_minutes).filter((x): x is number => x != null)
-    const avgResp = mean(sceneVals)
-
-    const prevRespVals = prevIncidents.map((i) => i.time_to_scene_minutes).filter((x): x is number => x != null)
-    const avgPrevResp = mean(prevRespVals)
+    const curRt = responseTimeKpiForPeriod(incidents)
+    const avgResp = curRt.avg
+    const responseMode = curRt.mode
+    const avgPrevResp = priorPeriodAverageForMode(prevIncidents, responseMode)
 
     const resPct = resolutionRatePct(incidents)
     const resPrevPct = resolutionRatePct(prevIncidents)
@@ -540,6 +579,7 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
       deltaTotal,
       avgResp,
       avgPrevResp,
+      responseMode,
       resPct,
       resPrevPct,
       hoaxPct,
@@ -586,14 +626,18 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
   const peakLabel = useMemo(() => formatPeakLabel(hourData.map((d) => d.count)), [hourData])
 
   const responseTrendData = useMemo(() => {
+    const { mode } = responseTimeKpiForPeriod(incidents)
+    if (mode === 'none') return []
     const withResp = incidents
-      .filter((i) => i.time_to_scene_minutes != null)
+      .filter((i) =>
+        mode === 'scene' ? i.time_to_scene_minutes != null : i.first_response_minutes != null,
+      )
       .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
       .slice(0, 10)
       .reverse()
       .map((i, idx) => ({
         n: idx + 1,
-        minutes: i.time_to_scene_minutes as number,
+        minutes: (mode === 'scene' ? i.time_to_scene_minutes : i.first_response_minutes) as number,
         label: `#${idx + 1}`,
       }))
     return withResp
@@ -728,7 +772,13 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
             <article className="ops-kpi-card">
               <div className="ops-kpi-head">
                 <span className="ops-kpi-ico" aria-hidden>{Ic.clock}</span>
-                <span className="ops-kpi-name">Avg time to scene</span>
+                <span className="ops-kpi-name">
+                  {metrics.responseMode === 'scene'
+                    ? 'Avg time to scene'
+                    : metrics.responseMode === 'dispatch'
+                      ? 'Avg time to dispatch'
+                      : 'Avg response'}
+                </span>
               </div>
               <div className="ops-kpi-body">
                 <div className="ops-kpi-gauge-row">
@@ -972,7 +1022,13 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
 
           <div className="ops-chart-grid">
             <section className="ops-panel">
-              <h3>Time to scene (recent incidents)</h3>
+              <h3>
+                {metrics.responseMode === 'scene'
+                  ? 'Time to scene (recent incidents)'
+                  : metrics.responseMode === 'dispatch'
+                    ? 'Time to dispatch (recent incidents)'
+                    : 'Response times (recent incidents)'}
+              </h3>
               {responseTrendData.length < 2 ? (
                 <p className="ops-placeholder">Not enough data yet</p>
               ) : (
