@@ -114,6 +114,20 @@ function primaryActionLabel(step: DriverStep): string {
   }
 }
 
+const NH48_KM_LENGTH = 312
+
+/** Approximate KM along NH48 from coordinates (projection onto Bengaluru–Chennai segment). */
+function kmAlongNh48FromLatLng(lat: number, lng: number): number {
+  const b = { lat: 12.9716, lng: 77.5946 }
+  const c = { lat: 13.0827, lng: 80.2707 }
+  const dx = c.lng - b.lng
+  const dy = c.lat - b.lat
+  const len2 = dx * dx + dy * dy
+  if (len2 <= 0) return 0
+  const t = Math.max(0, Math.min(1, ((lng - b.lng) * dx + (lat - b.lat) * dy) / len2))
+  return t * NH48_KM_LENGTH
+}
+
 function googleMapsDirectionsUrl(lat: number, lng: number): string {
   const d = `${lat},${lng}`
   return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(d)}`
@@ -190,7 +204,9 @@ export default function App() {
   const [history, setHistory] = useState<HistoryRow[]>([])
   const [hoaxFullScreen, setHoaxFullScreen] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [gpsOk, setGpsOk] = useState(true)
+  /** GPS fix quality for UI: active = recent successful read; weak = had fix then lost; no_signal = none / unsupported */
+  const [gpsFixState, setGpsFixState] = useState<'active' | 'weak' | 'no_signal'>('no_signal')
+  const [driverKmNH48, setDriverKmNH48] = useState<number | null>(null)
   const [awaitingNextCall, setAwaitingNextCall] = useState(false)
   const [broadcastPanel, setBroadcastPanel] = useState<DriverBroadcastPayload | null>(null)
   const [broadcastHistory, setBroadcastHistory] = useState<DriverBroadcastPayload[]>([])
@@ -201,7 +217,7 @@ export default function App() {
   const hadLocationSuccess = useRef(false)
   const incidentRef = useRef<IncidentDetail | null>(null)
 
-  const { tier, isOffline } = useDriverNetwork(lastFetchFailed)
+  const { isOffline } = useDriverNetwork(lastFetchFailed)
 
   useEffect(() => {
     incidentRef.current = incident
@@ -423,7 +439,8 @@ export default function App() {
   useEffect(() => {
     if (!token || !vehicle?.id) return
     if (!navigator.geolocation) {
-      setGpsOk(false)
+      setGpsFixState('no_signal')
+      setDriverKmNH48(null)
       return
     }
 
@@ -435,18 +452,26 @@ export default function App() {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           hadLocationSuccess.current = true
-          setGpsOk(true)
-          postLocation(pos.coords.latitude, pos.coords.longitude)
+          const lat = pos.coords.latitude
+          const lng = pos.coords.longitude
+          setGpsFixState('active')
+          setDriverKmNH48(kmAlongNh48FromLatLng(lat, lng))
+          postLocation(lat, lng)
         },
         () => {
-          if (hadLocationSuccess.current) setGpsOk(false)
+          if (hadLocationSuccess.current) {
+            setGpsFixState('weak')
+          } else {
+            setGpsFixState('no_signal')
+            setDriverKmNH48(null)
+          }
         },
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 12_000 },
       )
     }
 
     tick()
-    const interval = window.setInterval(tick, 10_000)
+    const interval = window.setInterval(tick, 30_000)
     return () => window.clearInterval(interval)
   }, [token, vehicle])
 
@@ -480,7 +505,8 @@ export default function App() {
     if (user?.id) clearBroadcastLog(user.id)
     setBroadcastHistory([])
     hadLocationSuccess.current = false
-    setGpsOk(true)
+    setGpsFixState('no_signal')
+    setDriverKmNH48(null)
   }
 
   const dismissHoax = () => {
@@ -627,12 +653,9 @@ export default function App() {
           created_at: s.created_at,
         }))
 
-  const netBannerText =
-    tier === 'connected'
-      ? '🟢 Connected'
-      : tier === 'weak'
-        ? '🟠 Weak signal — cached data shown'
-        : '🔴 Offline — last assignment cached'
+  const internetOnline = !isOffline
+  const showDualOfflineBanner = isOffline && gpsFixState !== 'active'
+  const showDriverKmLine = gpsFixState === 'active' && driverKmNH48 != null && Number.isFinite(driverKmNH48)
 
   const dismissBroadcastPanel = () => setBroadcastPanel(null)
 
@@ -678,17 +701,39 @@ export default function App() {
         </div>
       ) : null}
 
-      <div className={`drv-net-banner drv-net-banner--${tier}`} role="status" aria-live="polite">
-        {netBannerText}
-      </div>
+      {showDualOfflineBanner ? (
+        <div className="drv-dual-offline-banner" role="alert">
+          ⚠️ No internet + No GPS — operating in offline mode
+        </div>
+      ) : null}
 
       <header className="drv-topbar">
         <div className="drv-topbar-main">
           <p className="drv-name">{driverLine}</p>
           {vehicle && <p className="drv-ambulance-id">{vehicle.label}</p>}
+          {showDriverKmLine && driverKmNH48 != null ? (
+            <p className="drv-topbar-km" role="status">
+              📍 KM {Math.round(driverKmNH48)} · NH48
+            </p>
+          ) : null}
         </div>
-        <div className={`drv-gps-pill ${gpsOk ? 'drv-gps-on' : 'drv-gps-off'}`} role="status" aria-live="polite">
-          {gpsOk ? 'GPS ON' : 'GPS OFF'}
+        <div className="drv-topbar-pills" aria-live="polite">
+          <span
+            className={`drv-status-pill drv-status-pill--net ${internetOnline ? 'drv-status-pill--ok' : 'drv-status-pill--bad'}`}
+          >
+            {internetOnline ? '📶 Internet: On' : '📶 Offline'}
+          </span>
+          <span
+            className={`drv-status-pill drv-status-pill--gps ${
+              gpsFixState === 'active' ? 'drv-status-pill--ok' : 'drv-status-pill--warn'
+            }`}
+          >
+            {gpsFixState === 'active'
+              ? '📍 GPS: Active'
+              : gpsFixState === 'weak'
+                ? '📍 GPS: Weak'
+                : '📍 GPS: No signal'}
+          </span>
         </div>
       </header>
 

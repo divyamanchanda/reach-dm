@@ -222,26 +222,51 @@
   letter-spacing: 0.04em;
 }
 
-.drv-gps-pill {
+.drv-topbar-km {
+  margin: 0.4rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #a5b4fc;
+  letter-spacing: 0.02em;
+}
+
+.drv-topbar-pills {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
   flex-shrink: 0;
-  align-self: center;
-  padding: 0.5rem 0.85rem;
+  max-width: 11rem;
+}
+
+.drv-status-pill {
+  display: inline-block;
+  padding: 0.35rem 0.65rem;
   border-radius: 999px;
-  font-weight: 900;
-  font-size: 0.85rem;
-  letter-spacing: 0.06em;
+  font-weight: 800;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  letter-spacing: 0.02em;
+  text-align: right;
+  border: 1px solid transparent;
 }
 
-.drv-gps-on {
-  background: rgba(34, 197, 94, 0.2);
+.drv-status-pill--ok {
+  background: rgba(34, 197, 94, 0.18);
   color: #86efac;
-  border: 2px solid var(--drv-gps-on);
+  border-color: rgba(34, 197, 94, 0.55);
 }
 
-.drv-gps-off {
+.drv-status-pill--bad {
   background: rgba(239, 68, 68, 0.2);
   color: #fecaca;
-  border: 2px solid var(--drv-gps-off);
+  border-color: rgba(248, 113, 113, 0.55);
+}
+
+.drv-status-pill--warn {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+  border-color: rgba(251, 191, 36, 0.5);
 }
 
 .drv-login {
@@ -676,32 +701,19 @@
 }
 
 /* Network + offline resilience */
-.drv-net-banner {
+.drv-dual-offline-banner {
   position: sticky;
   top: 0;
   z-index: 350;
-  padding: 0.5rem 0.85rem;
-  padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
-  font-size: 0.86rem;
+  padding: 0.55rem 0.85rem;
+  padding-top: max(0.55rem, env(safe-area-inset-top, 0px));
+  font-size: 0.88rem;
   font-weight: 800;
   text-align: center;
   line-height: 1.35;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
-}
-
-.drv-net-banner--connected {
-  background: #14532d;
-  color: #dcfce7;
-}
-
-.drv-net-banner--weak {
-  background: #9a3412;
-  color: #ffedd5;
-}
-
-.drv-net-banner--offline {
   background: #7f1d1d;
   color: #fecaca;
+  border-bottom: 1px solid #991b1b;
 }
 
 .drv-sync-toast {
