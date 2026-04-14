@@ -35,14 +35,16 @@ const DefaultIcon = L.icon({
 L.Marker.prototype.options.icon = DefaultIcon
 
 const NH48_KM_LENGTH = 312
-/** Demo NH48 polyline (Bengaluru–Chennai), matches backend geo seed. */
-const NH48_WAYPOINTS: L.LatLngExpression[] = [
-  [12.9716, 77.5946],
-  [12.7409, 77.8253],
-  [12.5266, 78.2137],
-  [12.9165, 79.1325],
-  [13.0827, 80.2707],
+/** NH48 route: KM anchors along Bengaluru → Chennai polyline (analytics map). */
+const NH48_ROUTE: { km: number; lat: number; lng: number }[] = [
+  { km: 0, lat: 12.9716, lng: 77.5946 },
+  { km: 52, lat: 12.7409, lng: 77.8253 },
+  { km: 100, lat: 12.5266, lng: 78.2137 },
+  { km: 218, lat: 12.9165, lng: 79.1325 },
+  { km: 312, lat: 13.0827, lng: 80.2707 },
 ]
+
+const NH48_WAYPOINTS: L.LatLngExpression[] = NH48_ROUTE.map((p) => [p.lat, p.lng])
 
 /** Icons as codepoints — keeps source file encoding-safe. */
 const Ic = {
@@ -82,10 +84,65 @@ function nearestTownForSegmentMid(midKm: number): string {
 }
 
 function latLngFromKm(km: number): L.LatLngTuple {
-  const t = Math.max(0, Math.min(1, km / NH48_KM_LENGTH))
-  const a = NH48_WAYPOINTS[0] as L.LatLngTuple
-  const b = NH48_WAYPOINTS[NH48_WAYPOINTS.length - 1] as L.LatLngTuple
-  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+  const k = Math.max(0, Math.min(NH48_KM_LENGTH, km))
+  const r = NH48_ROUTE
+  if (k <= r[0].km) return [r[0].lat, r[0].lng]
+  for (let i = 0; i < r.length - 1; i++) {
+    const a = r[i]
+    const b = r[i + 1]
+    if (k <= b.km) {
+      const span = b.km - a.km
+      const t = span > 0 ? (k - a.km) / span : 0
+      const u = Math.max(0, Math.min(1, t))
+      return [a.lat + (b.lat - a.lat) * u, a.lng + (b.lng - a.lng) * u]
+    }
+  }
+  const last = r[r.length - 1]
+  return [last.lat, last.lng]
+}
+
+function hasValidGps(lat: number | null | undefined, lng: number | null | undefined): boolean {
+  return lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
+}
+
+function closestPointOnSegment(
+  lat: number,
+  lng: number,
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): L.LatLngTuple {
+  const dlat = lat2 - lat1
+  const dlng = lng2 - lng1
+  const len2 = dlat * dlat + dlng * dlng
+  if (len2 < 1e-18) return [lat1, lng1]
+  let t = ((lat - lat1) * dlat + (lng - lng1) * dlng) / len2
+  t = Math.max(0, Math.min(1, t))
+  return [lat1 + t * dlat, lng1 + t * dlng]
+}
+
+function squaredPlanarDist(latA: number, lngA: number, latB: number, lngB: number): number {
+  const dlat = latA - latB
+  const dlng = lngA - lngB
+  return dlat * dlat + dlng * dlng
+}
+
+/** Snap a GPS point to the nearest point on the NH48 polyline (segment-wise). */
+function snapGpsToNH48(lat: number, lng: number): L.LatLngTuple {
+  let best: L.LatLngTuple = [lat, lng]
+  let bestD = Infinity
+  for (let i = 0; i < NH48_ROUTE.length - 1; i++) {
+    const a = NH48_ROUTE[i]
+    const b = NH48_ROUTE[i + 1]
+    const c = closestPointOnSegment(lat, lng, a.lat, a.lng, b.lat, b.lng)
+    const d = squaredPlanarDist(lat, lng, c[0], c[1])
+    if (d < bestD) {
+      bestD = d
+      best = c
+    }
+  }
+  return best
 }
 
 export type AnalyticsPeriod = 'today' | '7d' | '30d'
@@ -267,7 +324,13 @@ function OpsLiveMap({
       attribution: '&copy; OpenStreetMap',
       maxZoom: 19,
     }).addTo(map)
-    const poly = L.polyline(NH48_WAYPOINTS, { color: '#475569', weight: 4, opacity: 0.75 }).addTo(map)
+    const poly = L.polyline(NH48_WAYPOINTS, {
+      color: '#2563eb',
+      weight: 4,
+      opacity: 0.95,
+      lineCap: 'round',
+      lineJoin: 'round',
+    }).addTo(map)
     map.fitBounds(poly.getBounds(), { padding: [40, 40] })
     layerRef.current = L.layerGroup().addTo(map)
     mapRef.current = map
@@ -288,12 +351,15 @@ function OpsLiveMap({
 
     for (const c of liveMap.corridors) {
       for (const inc of c.incidents) {
-        let lat = inc.latitude
-        let lng = inc.longitude
-        if ((lat == null || lng == null) && inc.km_marker != null) {
+        let lat: number
+        let lng: number
+        if (hasValidGps(inc.latitude, inc.longitude)) {
+          ;[lat, lng] = snapGpsToNH48(inc.latitude as number, inc.longitude as number)
+        } else if (inc.km_marker != null) {
           ;[lat, lng] = latLngFromKm(inc.km_marker)
+        } else {
+          continue
         }
-        if (lat == null || lng == null) continue
         const icon = L.divIcon({
           className: 'ops-leaflet-divicon',
           html: incidentMarkerHtml(inc.severity),
@@ -311,12 +377,16 @@ function OpsLiveMap({
       }
 
       for (const v of c.vehicles) {
-        let lat = v.latitude
-        let lng = v.longitude
-        if ((lat == null || lng == null) && v.km_marker != null) {
+        let lat: number
+        let lng: number
+        if (hasValidGps(v.latitude, v.longitude)) {
+          lat = v.latitude as number
+          lng = v.longitude as number
+        } else if (v.km_marker != null) {
           ;[lat, lng] = latLngFromKm(v.km_marker)
+        } else {
+          continue
         }
-        if (lat == null || lng == null) continue
         const col = vehicleStatusColor(v.status)
         const icon = L.divIcon({
           className: 'ops-leaflet-divicon',
@@ -352,11 +422,14 @@ function OpsLiveMap({
   }, [liveMap])
 
   return (
-    <div className="ops-map-shell">
-      <div ref={rootRef} className="ops-map-canvas" />
-      <div className="ops-map-live-badge" aria-hidden>
-        <span className="ops-map-live-dot" /> LIVE
+    <div className="ops-map-wrap">
+      <div className="ops-map-shell">
+        <div ref={rootRef} className="ops-map-canvas" />
+        <div className="ops-map-live-badge" aria-hidden>
+          <span className="ops-map-live-dot" /> LIVE
+        </div>
       </div>
+      <p className="ops-map-footnote">Incidents snapped to nearest highway point</p>
     </div>
   )
 }

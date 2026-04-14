@@ -1970,6 +1970,20 @@ tr:last-child td {
   margin-bottom: 1rem;
 }
 
+.ops-map-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.ops-map-footnote {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #64748b;
+  line-height: 1.35;
+}
+
 .ops-map-shell {
   position: relative;
   border-radius: 10px;
