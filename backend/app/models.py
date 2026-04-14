@@ -27,6 +27,7 @@ class Corridor(Base):
     start_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     end_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     end_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    waypoints: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     km_start: Mapped[float | None] = mapped_column(Float, nullable=True)
     km_end: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

@@ -41,6 +41,7 @@ class CorridorOut(BaseModel):
     start_lng: float | None = None
     end_lat: float | None = None
     end_lng: float | None = None
+    waypoints: list[dict] | None = None
     km_start: float | None
     km_end: float | None
     is_active: bool
@@ -168,6 +169,7 @@ _HAZARD_IDS = frozenset({"fire_smoke", "fuel_spill", "live_wire", "lane_blocked"
 
 
 class PublicIncidentCreate(BaseModel):
+    corridor_id: uuid.UUID | None = None
     incident_type: str
     severity: str
     injured_count: int = 0
@@ -176,6 +178,7 @@ class PublicIncidentCreate(BaseModel):
     km_marker: float | None = None
     photo_url: str | None = None
     notes: str | None = None
+    highway_hint: str | None = None
     direction: str | None = None
     hazards: list[str] = Field(default_factory=list)
     vehicles_involved: int = Field(1, ge=0, le=99)
@@ -205,6 +208,29 @@ class PublicIncidentResponse(BaseModel):
     trust_score: int
     trust_recommendation: str | None
     nearest_ambulance_eta_minutes: float | None
+
+
+class CorridorDetectRequest(BaseModel):
+    lat: float | None = Field(None, ge=-90, le=90)
+    lng: float | None = Field(None, ge=-180, le=180)
+    km_marker: float | None = None
+    highway_hint: str | None = None
+
+    @field_validator("highway_hint", mode="before")
+    @classmethod
+    def normalize_hint(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s or None
+
+
+class CorridorDetectResponse(BaseModel):
+    corridor_id: uuid.UUID
+    corridor_name: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    method: Literal["gps_polyline", "km_range"]
+    matches: list[dict] = Field(default_factory=list)
 
 
 class VehicleMapOut(BaseModel):

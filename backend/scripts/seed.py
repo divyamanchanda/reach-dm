@@ -40,11 +40,35 @@ def clear_and_seed(db: Session) -> None:
     db.execute(
         text(
             """
-            INSERT INTO corridors (id, organisation_id, name, code, km_start, km_end, is_active)
-            VALUES (:id, :oid, 'NH48 Bengaluru–Chennai (demo)', 'NH48', 0, 312, true)
+            INSERT INTO corridors (
+              id, organisation_id, name, code,
+              start_lat, start_lng, end_lat, end_lng, waypoints,
+              km_start, km_end, is_active
+            )
+            VALUES (
+              :id, :oid, 'NH48 Bengaluru–Chennai (demo)', 'NH48',
+              :s_lat, :s_lng, :e_lat, :e_lng, CAST(:wps AS jsonb),
+              0, 312, true
+            )
             """
         ),
-        {"id": str(corridor_id), "oid": str(org_id)},
+        {
+            "id": str(corridor_id),
+            "oid": str(org_id),
+            "s_lat": 12.9716,
+            "s_lng": 77.5946,
+            "e_lat": 13.0827,
+            "e_lng": 80.2707,
+            "wps": json.dumps(
+                [
+                    {"lat": 12.9716, "lng": 77.5946},
+                    {"lat": 12.7409, "lng": 77.8253},
+                    {"lat": 12.5266, "lng": 78.2137},
+                    {"lat": 12.9165, "lng": 79.1325},
+                    {"lat": 13.0827, "lng": 80.2707},
+                ]
+            ),
+        },
     )
     for zone_name, a, b in [
         ("Zone A", 0, 80),

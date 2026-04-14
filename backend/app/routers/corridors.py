@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -20,16 +21,30 @@ from app.schemas import (
 )
 from app.security import get_current_user
 from app.services.public_incident import create_public_incident_row
+from app.services.corridor_detection import detect_corridor
 from app.services.incident_lifecycle import expire_stale_open_incidents, incident_eligible_for_operator_reassign
 from app.routers.incidents import _push_corridor_stats, _push_incident_new
 
 router = APIRouter(prefix="/corridors", tags=["corridors"])
 
 SEVERITY_ORDER = {"critical": 0, "major": 1, "minor": 2}
+_HIGHWAY_HINT_RE = re.compile(r"\bNH\s*-?\s*\d{1,4}\b", re.IGNORECASE)
 
 
 def _severity_rank(sev: str) -> int:
     return SEVERITY_ORDER.get(sev.lower(), 9)
+
+
+def _hint_from_body(body: PublicIncidentCreate) -> str | None:
+    if body.highway_hint and body.highway_hint.strip():
+        return body.highway_hint.strip()
+    for raw in (body.notes, body.incident_type):
+        if not raw:
+            continue
+        m = _HIGHWAY_HINT_RE.search(raw)
+        if m:
+            return m.group(0)
+    return None
 
 
 @router.get("", response_model=list[CorridorOut])
@@ -175,3 +190,35 @@ def post_public_incident(
     background_tasks.add_task(_push_incident_new, corridor_id, {"incident_id": str(result.incident_id)})
     background_tasks.add_task(_push_corridor_stats, corridor_id)
     return result
+
+
+@router.post("/incidents/public", response_model=PublicIncidentResponse)
+def post_public_incident_auto_corridor(
+    body: PublicIncidentCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    corridor_id = body.corridor_id
+    if corridor_id is None:
+        det = detect_corridor(
+            db,
+            lat=body.latitude,
+            lng=body.longitude,
+            km_marker=body.km_marker,
+            highway_hint=_hint_from_body(body),
+        )
+        if det is not None:
+            corridor_id = det.corridor_id
+    if corridor_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not auto-detect corridor. Provide corridor_id or add GPS/KM/highway hint.",
+        )
+    if not db.get(Corridor, corridor_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Corridor not found")
+    result = create_public_incident_row(db, corridor_id, body)
+    background_tasks.add_task(_push_incident_new, corridor_id, {"incident_id": str(result.incident_id)})
+    background_tasks.add_task(_push_corridor_stats, corridor_id)
+    return result
+
+
