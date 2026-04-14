@@ -47,33 +47,33 @@ function readCorridorsFromEnv(): CorridorOption[] | null {
 async function fetchCorridorOptions(): Promise<{ rows: CorridorOption[]; error: string | null }> {
   const envRows = readCorridorsFromEnv()
   let lastStatus = 0
-  for (const path of ['/public/corridors', '/corridors/public']) {
-    try {
-      const r = await fetch(apiUrl(path))
-      lastStatus = r.status
-      if (!r.ok) continue
+  try {
+    const r = await fetch(apiUrl('/public/corridors'))
+    lastStatus = r.status
+    if (r.ok) {
       const data = (await r.json()) as unknown
-      if (!Array.isArray(data)) continue
-      const rows: CorridorOption[] = []
-      for (const x of data) {
-        if (!x || typeof x !== 'object' || !('id' in x)) continue
-        const id = String((x as { id: unknown }).id)
-        const name = 'name' in x ? String((x as { name: unknown }).name) : id
-        if (id) rows.push({ id, name })
+      if (Array.isArray(data)) {
+        const rows: CorridorOption[] = []
+        for (const x of data) {
+          if (!x || typeof x !== 'object' || !('id' in x)) continue
+          const id = String((x as { id: unknown }).id)
+          const name = 'name' in x ? String((x as { name: unknown }).name) : id
+          if (id) rows.push({ id, name })
+        }
+        if (rows.length) return { rows, error: null }
       }
-      return { rows, error: rows.length ? null : 'No highways are available yet.' }
-    } catch {
-      continue
     }
+  } catch {
+    /* fall through */
   }
   if (envRows?.length) return { rows: envRows, error: null }
   const hint =
     lastStatus === 404
-      ? ' Update the REACH API (deploy latest backend) so /api/public/corridors is available.'
+      ? ' Update the REACH API so GET /api/public/corridors is available.'
       : ''
   return {
     rows: [],
-    error: `Could not load highways.${hint} You can set VITE_PUBLIC_CORRIDORS_JSON on the web app as a temporary list.`,
+    error: `Could not load highways.${hint} You can set VITE_PUBLIC_CORRIDORS_JSON as a temporary dev list.`,
   }
 }
 
@@ -83,6 +83,45 @@ type PublicResponse = {
   trust_score: number
   trust_recommendation: string | null
   nearest_ambulance_eta_minutes: number | null
+}
+
+const GPS_TIMEOUT_MS = 10_000
+const HW_DETECT_FAIL_MSG = '\u26A0\uFE0F Could not detect highway — please select manually'
+
+function getGpsPosition(timeoutMs: number): Promise<{ lat: number; lng: number } | null> {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      resolve(null)
+      return
+    }
+    let settled = false
+    const timer = window.setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve(null)
+    }, timeoutMs)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        const lat = pos.coords.latitude
+        const lng = pos.coords.longitude
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          resolve(null)
+          return
+        }
+        resolve({ lat, lng })
+      },
+      () => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        resolve(null)
+      },
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 },
+    )
+  })
 }
 
 const INCIDENT_TYPES = [
@@ -170,7 +209,8 @@ export default function App() {
   const [detectedCorridorName, setDetectedCorridorName] = useState<string | null>(null)
   const [detectMsg, setDetectMsg] = useState<string | null>(null)
   const [detectMultiMatches, setDetectMultiMatches] = useState<CorridorOption[]>([])
-  const [gpsDetectionFailed, setGpsDetectionFailed] = useState(false)
+  /** True when /corridor/detect failed or returned no match — show manual corridor dropdown. */
+  const [corridorAutodetectFailed, setCorridorAutodetectFailed] = useState(false)
   const gpsDetectKeyRef = useRef<string>('')
 
   const [incidentType, setIncidentType] = useState<string>(INCIDENT_TYPES[0].value)
@@ -244,7 +284,10 @@ export default function App() {
       for (const item of items) {
         if (cancelled) return
         try {
-          const r = await fetch(apiUrl(`/corridors/${item.corridorId}/incidents/public`), {
+          const path = item.corridorId
+            ? `/corridors/${item.corridorId}/incidents/public`
+            : '/corridors/incidents/public'
+          const r = await fetch(apiUrl(path), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(item.body),
@@ -291,18 +334,15 @@ export default function App() {
   const startGps = useCallback(() => {
     setGeo(null)
     setLocState('pending')
-    if (!navigator.geolocation) {
-      setLocState('fail')
-      return
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+    void getGpsPosition(GPS_TIMEOUT_MS).then((pos) => {
+      if (pos) {
+        setGeo(pos)
         setLocState('ok')
-      },
-      () => setLocState('fail'),
-      { enableHighAccuracy: true, timeout: 22000, maximumAge: 0 },
-    )
+      } else {
+        setGeo(null)
+        setLocState('fail')
+      }
+    })
   }, [])
 
   const beginReport = useCallback(() => {
@@ -326,7 +366,7 @@ export default function App() {
     setDetectedCorridorName(null)
     setDetectMsg(null)
     setDetectMultiMatches([])
-    setGpsDetectionFailed(false)
+    setCorridorAutodetectFailed(false)
     gpsDetectKeyRef.current = ''
     setPhase('form')
     startGps()
@@ -342,13 +382,17 @@ export default function App() {
 
   const detectCorridor = useCallback(
     async (payload: { lat?: number; lng?: number; km_marker?: number; highway_hint?: string }) => {
-      const r = await fetch(apiUrl('/corridor/detect'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-      if (!r.ok) return null
-      return (await r.json()) as CorridorDetectResponse
+      try {
+        const r = await fetch(apiUrl('/corridor/detect'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        if (!r.ok) return null
+        return (await r.json()) as CorridorDetectResponse
+      } catch {
+        return null
+      }
     },
     [],
   )
@@ -384,19 +428,21 @@ export default function App() {
     let cancelled = false
     setDetectBusy(true)
     setDetectMsg(null)
+    setCorridorAutodetectFailed(false)
     void detectCorridor({ lat: geo.lat, lng: geo.lng }).then((det) => {
       if (cancelled) return
       setDetectBusy(false)
-      if (!det) {
-        setGpsDetectionFailed(true)
+      if (!det?.corridor_id || !det.corridor_name) {
+        setCorridorAutodetectFailed(true)
+        setCorridorId('')
         setDetectedCorridorName(null)
-        setDetectMsg('Could not auto-detect highway from GPS. Please choose manually.')
+        setDetectMsg(HW_DETECT_FAIL_MSG)
         return
       }
-      setGpsDetectionFailed(false)
+      setCorridorAutodetectFailed(false)
       setCorridorId(det.corridor_id)
       setDetectedCorridorName(det.corridor_name)
-      setDetectMsg(`📍 GPS captured · Highway detected: ${det.corridor_name} ✓`)
+      setDetectMsg(null)
     })
     return () => {
       cancelled = true
@@ -407,18 +453,21 @@ export default function App() {
     if (phase !== 'form' || !gpsFailed) return
     if (!kmValid || kmNum == null) {
       setDetectMultiMatches([])
-      setDetectedCorridorName(null)
       return
     }
     let cancelled = false
     setDetectBusy(true)
     setDetectMsg(null)
+    setCorridorAutodetectFailed(false)
     void detectCorridor({ km_marker: kmNum, highway_hint: highwaySearch.trim() || undefined }).then((det) => {
       if (cancelled) return
       setDetectBusy(false)
-      if (!det) {
-        setDetectMsg('Could not detect highway from milestone. Pick manually below.')
+      if (!det?.corridor_id || !det.corridor_name) {
+        setCorridorAutodetectFailed(true)
+        setCorridorId('')
+        setDetectedCorridorName(null)
         setDetectMultiMatches([])
+        setDetectMsg(HW_DETECT_FAIL_MSG)
         return
       }
       const multi = Array.isArray(det.matches)
@@ -428,12 +477,14 @@ export default function App() {
         setDetectMultiMatches(multi)
         setDetectedCorridorName(null)
         setCorridorId('')
+        setCorridorAutodetectFailed(false)
         setDetectMsg('Which highway?')
       } else {
         setDetectMultiMatches([])
         setCorridorId(det.corridor_id)
         setDetectedCorridorName(det.corridor_name)
-        setDetectMsg(`🛣️ Highway: ${det.corridor_name} detected from milestone`)
+        setCorridorAutodetectFailed(false)
+        setDetectMsg(null)
       }
     })
     return () => {
@@ -554,31 +605,15 @@ export default function App() {
     setCrashBusy(true)
     setError(null)
     try {
-      const pos = await new Promise<GeolocationPosition | null>((resolve) => {
-        if (!navigator.geolocation) {
-          resolve(null)
-          return
-        }
-        navigator.geolocation.getCurrentPosition(
-          (p) => resolve(p),
-          () => resolve(null),
-          { enableHighAccuracy: true, timeout: 18_000, maximumAge: 0 },
-        )
-      })
-      const lat = pos?.coords.latitude
-      const lng = pos?.coords.longitude
-      const gpsOk = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
-
-      const det =
-        gpsOk && lat != null && lng != null ? await detectCorridor({ lat, lng }) : null
-      const { rows } = await fetchCorridorOptions()
-      const effectiveCorridor = det?.corridor_id || rows[0]?.id || ''
-
-      if (!effectiveCorridor) {
-        setError('Could not determine highway for auto SOS. Enable location and try a manual report.')
+      const coords = await getGpsPosition(GPS_TIMEOUT_MS)
+      if (!coords) {
+        setError('Could not get your location for auto SOS. Enable GPS and try a manual report.')
         setPhase('landing')
         return
       }
+
+      const det = await detectCorridor({ lat: coords.lat, lng: coords.lng })
+      const pathCorridor = det?.corridor_id ?? ''
 
       const payloadBody: PendingSosPayload = {
         incident_type: 'accident',
@@ -587,18 +622,21 @@ export default function App() {
         vehicles_involved: 1,
         hazards: [],
         notes: 'Auto-detected crash — no user response',
-        latitude: gpsOk ? lat : undefined,
-        longitude: gpsOk ? lng : undefined,
+        latitude: coords.lat,
+        longitude: coords.lng,
       }
 
       if (!isConnected) {
-        enqueuePending(effectiveCorridor, payloadBody)
+        enqueuePending(pathCorridor, payloadBody)
         setQueueVersion((v) => v + 1)
         setPhase('offline_saved')
         return
       }
 
-      const r = await fetch(apiUrl(`/corridors/${effectiveCorridor}/incidents/public`), {
+      const path = pathCorridor
+        ? `/corridors/${pathCorridor}/incidents/public`
+        : '/corridors/incidents/public'
+      const r = await fetch(apiUrl(path), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payloadBody),
@@ -652,6 +690,11 @@ export default function App() {
     setGeo(null)
     setLocState('pending')
     setCorridorId('')
+    setCorridorAutodetectFailed(false)
+    setDetectedCorridorName(null)
+    setDetectMsg(null)
+    setDetectMultiMatches([])
+    gpsDetectKeyRef.current = ''
   }
 
   return (
@@ -842,17 +885,25 @@ export default function App() {
             {locState === 'pending' && (
               <p className="loc-pending" role="status">
                 <span className="loc-dot" aria-hidden="true" />
-                Requesting GPS from your device…
+                📍 Getting your location...
               </p>
             )}
             {locState === 'ok' && (
               <>
                 <p className="loc-ok" role="status">
-                  {detectMsg ?? '📍 GPS captured ✓'}
+                  📍 GPS captured ✓
                 </p>
                 {detectBusy ? <p className="sos-warn">Detecting highway…</p> : null}
-                {gpsDetectionFailed ? (
+                {!detectBusy && !corridorAutodetectFailed && detectedCorridorName && corridorId ? (
+                  <p className="loc-ok loc-ok--small" role="status">
+                    Highway detected: {detectedCorridorName} ✓
+                  </p>
+                ) : null}
+                {corridorAutodetectFailed ? (
                   <>
+                    <p className="sos-warn" role="status">
+                      {HW_DETECT_FAIL_MSG}
+                    </p>
                     {corridorsLoading && <p className="sos-warn">Loading highways…</p>}
                     {corridorsError && !corridorsLoading && <p className="sos-warn">{corridorsError}</p>}
                     {!corridorsLoading && (corridorsError || corridors.length === 0) && (
@@ -892,21 +943,51 @@ export default function App() {
             {locState === 'fail' && (
               <div className="loc-fallback">
                 <p className="loc-bad" role="status">
-                  GPS unavailable — enter details below
+                  GPS not available
                 </p>
                 {detectBusy ? <p className="sos-warn">Detecting highway…</p> : null}
-                {detectMsg ? <p className="loc-ok loc-ok--small">{detectMsg}</p> : null}
-                {corridorsLoading && <p className="sos-warn">Loading highways…</p>}
-                {corridorsError && !corridorsLoading && <p className="sos-warn">{corridorsError}</p>}
-                {!corridorsLoading && (corridorsError || corridors.length === 0) && (
-                  <button
-                    type="button"
-                    className="sos-retry-hw"
-                    onClick={() => setCorridorsRetryKey((k) => k + 1)}
-                  >
-                    Reload highway list
-                  </button>
-                )}
+                {detectMsg && detectMsg !== HW_DETECT_FAIL_MSG ? (
+                  <p className="loc-ok loc-ok--small">{detectMsg}</p>
+                ) : null}
+                {corridorAutodetectFailed ? (
+                  <>
+                    <p className="sos-warn" role="status">
+                      {HW_DETECT_FAIL_MSG}
+                    </p>
+                    {corridorsLoading && <p className="sos-warn">Loading highways…</p>}
+                    {corridorsError && !corridorsLoading && <p className="sos-warn">{corridorsError}</p>}
+                    {!corridorsLoading && (corridorsError || corridors.length === 0) && (
+                      <button
+                        type="button"
+                        className="sos-retry-hw"
+                        onClick={() => setCorridorsRetryKey((k) => k + 1)}
+                      >
+                        Reload highway list
+                      </button>
+                    )}
+                    {!corridorsLoading && corridors.length > 0 ? (
+                      <label className="sos-select-label">
+                        <span className="sos-km-label-text">Select highway manually</span>
+                        <select
+                          className="sos-km-input sos-select-tight"
+                          value={corridorId}
+                          onChange={(e) => {
+                            const id = e.target.value
+                            setCorridorId(id)
+                            setDetectedCorridorName(corridors.find((c) => c.id === id)?.name || null)
+                          }}
+                        >
+                          <option value="">Choose highway</option>
+                          {corridors.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                  </>
+                ) : null}
                 <label className="sos-km-label">
                   <span className="sos-km-label-text">Milestone number (optional)</span>
                   <span className="sos-km-hint">If you can see a green milestone stone, enter the number</span>
@@ -953,7 +1034,7 @@ export default function App() {
                         className="sos-km-input"
                         value={highwaySearch}
                         onChange={(e) => setHighwaySearch(e.target.value)}
-                        placeholder="e.g. NH48"
+                        placeholder="Highway name or number"
                         autoComplete="off"
                       />
                     </label>
