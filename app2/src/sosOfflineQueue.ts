@@ -14,6 +14,7 @@ export type PendingSosPayload = {
   direction?: string
   hazards?: string[]
   vehicles_involved?: number
+  highway_hint?: string
 }
 
 export type PendingSos = {

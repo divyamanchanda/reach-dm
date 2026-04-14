@@ -16,9 +16,14 @@ import {
 import { useCrashDetection } from './useCrashDetection'
 import { useNetworkConnectivity } from './useNetworkConnectivity'
 
-const DEFAULT_CORRIDOR = String(import.meta.env.VITE_CORRIDOR_ID ?? '').trim()
-
 type CorridorOption = { id: string; name: string }
+type CorridorDetectResponse = {
+  corridor_id: string
+  corridor_name: string
+  confidence: number
+  method: 'gps_polyline' | 'km_range'
+  matches?: { corridor_id: string; corridor_name: string }[]
+}
 
 function readCorridorsFromEnv(): CorridorOption[] | null {
   const raw = import.meta.env.VITE_PUBLIC_CORRIDORS_JSON as string | undefined
@@ -154,15 +159,19 @@ function HighwayButtonList({
 }
 
 export default function App() {
-  const params = useMemo(() => new URLSearchParams(window.location.search), [])
-  const corridorFromUrl = (params.get('corridor') || '').trim()
-
   const [phase, setPhase] = useState<Phase>('landing')
-  const [corridorId, setCorridorId] = useState(corridorFromUrl || DEFAULT_CORRIDOR)
+  const [corridorId, setCorridorId] = useState('')
   const [corridors, setCorridors] = useState<CorridorOption[]>([])
   const [corridorsError, setCorridorsError] = useState<string | null>(null)
   const [corridorsLoading, setCorridorsLoading] = useState(false)
   const [corridorsRetryKey, setCorridorsRetryKey] = useState(0)
+  const [highwaySearch, setHighwaySearch] = useState('')
+  const [detectBusy, setDetectBusy] = useState(false)
+  const [detectedCorridorName, setDetectedCorridorName] = useState<string | null>(null)
+  const [detectMsg, setDetectMsg] = useState<string | null>(null)
+  const [detectMultiMatches, setDetectMultiMatches] = useState<CorridorOption[]>([])
+  const [gpsDetectionFailed, setGpsDetectionFailed] = useState(false)
+  const gpsDetectKeyRef = useRef<string>('')
 
   const [incidentType, setIncidentType] = useState<string>(INCIDENT_TYPES[0].value)
   const [severity, setSeverity] = useState<string>('major')
@@ -312,10 +321,37 @@ export default function App() {
     })
     setIncidentType(INCIDENT_TYPES[0].value)
     setSeverity('major')
-    setCorridorId(corridorFromUrl || DEFAULT_CORRIDOR)
+    setCorridorId('')
+    setHighwaySearch('')
+    setDetectedCorridorName(null)
+    setDetectMsg(null)
+    setDetectMultiMatches([])
+    setGpsDetectionFailed(false)
+    gpsDetectKeyRef.current = ''
     setPhase('form')
     startGps()
-  }, [corridorFromUrl, startGps])
+  }, [startGps])
+
+  const gpsOk = locState === 'ok' && geo != null
+  const gpsFailed = locState === 'fail'
+  const kmNum = kmMarker.trim() === '' ? null : Number(kmMarker.trim())
+  const kmValid = kmNum != null && Number.isFinite(kmNum)
+  const filteredCorridors = corridors.filter((c) =>
+    c.name.toLowerCase().includes(highwaySearch.trim().toLowerCase()),
+  )
+
+  const detectCorridor = useCallback(
+    async (payload: { lat?: number; lng?: number; km_marker?: number; highway_hint?: string }) => {
+      const r = await fetch(apiUrl('/corridor/detect'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!r.ok) return null
+      return (await r.json()) as CorridorDetectResponse
+    },
+    [],
+  )
 
   useEffect(() => {
     if (phase !== 'form') return
@@ -341,25 +377,76 @@ export default function App() {
   }, [phase, corridors, corridorId])
 
   useEffect(() => {
-    if (phase !== 'form') return
-    if (corridorId) return
-    if (corridors.length !== 1) return
-    setCorridorId(corridors[0].id)
-  }, [phase, corridorId, corridors])
+    if (phase !== 'form' || !gpsOk || !geo) return
+    const k = `${geo.lat.toFixed(5)},${geo.lng.toFixed(5)}`
+    if (gpsDetectKeyRef.current === k) return
+    gpsDetectKeyRef.current = k
+    let cancelled = false
+    setDetectBusy(true)
+    setDetectMsg(null)
+    void detectCorridor({ lat: geo.lat, lng: geo.lng }).then((det) => {
+      if (cancelled) return
+      setDetectBusy(false)
+      if (!det) {
+        setGpsDetectionFailed(true)
+        setDetectedCorridorName(null)
+        setDetectMsg('Could not auto-detect highway from GPS. Please choose manually.')
+        return
+      }
+      setGpsDetectionFailed(false)
+      setCorridorId(det.corridor_id)
+      setDetectedCorridorName(det.corridor_name)
+      setDetectMsg(`📍 GPS captured · Highway detected: ${det.corridor_name} ✓`)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [phase, gpsOk, geo, detectCorridor])
 
-  const gpsOk = locState === 'ok' && geo != null
-  const gpsFailed = locState === 'fail'
-  const needsHighwayWhenGps =
-    phase === 'form' &&
-    locState === 'ok' &&
-    !corridorFromUrl &&
-    !DEFAULT_CORRIDOR &&
-    corridors.length > 1
-  const showMultiHighwayPicker =
-    !corridorsLoading && corridors.length > 1 && (gpsFailed || needsHighwayWhenGps)
+  useEffect(() => {
+    if (phase !== 'form' || !gpsFailed) return
+    if (!kmValid || kmNum == null) {
+      setDetectMultiMatches([])
+      setDetectedCorridorName(null)
+      return
+    }
+    let cancelled = false
+    setDetectBusy(true)
+    setDetectMsg(null)
+    void detectCorridor({ km_marker: kmNum, highway_hint: highwaySearch.trim() || undefined }).then((det) => {
+      if (cancelled) return
+      setDetectBusy(false)
+      if (!det) {
+        setDetectMsg('Could not detect highway from milestone. Pick manually below.')
+        setDetectMultiMatches([])
+        return
+      }
+      const multi = Array.isArray(det.matches)
+        ? det.matches.map((m) => ({ id: m.corridor_id, name: m.corridor_name }))
+        : []
+      if (multi.length > 1) {
+        setDetectMultiMatches(multi)
+        setDetectedCorridorName(null)
+        setCorridorId('')
+        setDetectMsg('Which highway?')
+      } else {
+        setDetectMultiMatches([])
+        setCorridorId(det.corridor_id)
+        setDetectedCorridorName(det.corridor_name)
+        setDetectMsg(`🛣️ Highway: ${det.corridor_name} detected from milestone`)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [phase, gpsFailed, kmValid, kmNum, highwaySearch, detectCorridor])
 
-  const kmNum = kmMarker.trim() === '' ? null : Number(kmMarker.trim())
-  const kmValid = kmNum != null && Number.isFinite(kmNum)
+  useEffect(() => {
+    if (!corridorId) return
+    const fromAll = corridors.find((c) => c.id === corridorId)?.name
+    const fromMatches = detectMultiMatches.find((c) => c.id === corridorId)?.name
+    if (fromAll || fromMatches) setDetectedCorridorName(fromAll || fromMatches || null)
+  }, [corridorId, corridors, detectMultiMatches])
 
   const toggleHazard = (id: string) => {
     if (id === 'none_visible') {
@@ -377,23 +464,7 @@ export default function App() {
     e.preventDefault()
     setError(null)
 
-    const effectiveCorridor =
-      corridorId ||
-      (corridors.length === 1 ? corridors[0].id : '') ||
-      corridorFromUrl ||
-      DEFAULT_CORRIDOR
-
-    if (!effectiveCorridor) {
-      setError('Choose the highway you are on.')
-      return
-    }
-
-    if (gpsFailed || needsHighwayWhenGps) {
-      if (!corridorId && corridors.length > 1) {
-        setError('Choose your highway from the list.')
-        return
-      }
-    }
+    const effectiveCorridor = corridorId || ''
 
     if (!isConnected && photoFile) {
       setError('Connect to the internet to send a photo with your report.')
@@ -429,11 +500,18 @@ export default function App() {
     if (kmValid) {
       payloadBody.km_marker = kmNum!
     }
+    if (highwaySearch.trim()) {
+      payloadBody.highway_hint = highwaySearch.trim()
+    }
     if (photo_url) {
       payloadBody.photo_url = photo_url
     }
 
     if (!isConnected) {
+      if (!effectiveCorridor) {
+        setError('Select your highway before saving offline.')
+        return
+      }
       setBusy(true)
       try {
         enqueuePending(effectiveCorridor, payloadBody)
@@ -447,7 +525,8 @@ export default function App() {
 
     setBusy(true)
     try {
-      const r = await fetch(apiUrl(`/corridors/${effectiveCorridor}/incidents/public`), {
+      const path = effectiveCorridor ? `/corridors/${effectiveCorridor}/incidents/public` : '/corridors/incidents/public'
+      const r = await fetch(apiUrl(path), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payloadBody),
@@ -490,13 +569,10 @@ export default function App() {
       const lng = pos?.coords.longitude
       const gpsOk = lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
 
+      const det =
+        gpsOk && lat != null && lng != null ? await detectCorridor({ lat, lng }) : null
       const { rows } = await fetchCorridorOptions()
-      const effectiveCorridor =
-        corridorFromUrl ||
-        DEFAULT_CORRIDOR ||
-        (rows.length === 1 ? rows[0].id : '') ||
-        rows[0]?.id ||
-        ''
+      const effectiveCorridor = det?.corridor_id || rows[0]?.id || ''
 
       if (!effectiveCorridor) {
         setError('Could not determine highway for auto SOS. Enable location and try a manual report.')
@@ -541,7 +617,7 @@ export default function App() {
       setCrashBusy(false)
       crashSendingRef.current = false
     }
-  }, [corridorFromUrl, isConnected])
+  }, [detectCorridor, isConnected])
 
   useEffect(() => {
     if (!crashModalOpen) return
@@ -575,7 +651,7 @@ export default function App() {
     setError(null)
     setGeo(null)
     setLocState('pending')
-    setCorridorId(corridorFromUrl || DEFAULT_CORRIDOR)
+    setCorridorId('')
   }
 
   return (
@@ -772,9 +848,10 @@ export default function App() {
             {locState === 'ok' && (
               <>
                 <p className="loc-ok" role="status">
-                  📍 GPS location captured ✓
+                  {detectMsg ?? '📍 GPS captured ✓'}
                 </p>
-                {needsHighwayWhenGps ? (
+                {detectBusy ? <p className="sos-warn">Detecting highway…</p> : null}
+                {gpsDetectionFailed ? (
                   <>
                     {corridorsLoading && <p className="sos-warn">Loading highways…</p>}
                     {corridorsError && !corridorsLoading && <p className="sos-warn">{corridorsError}</p>}
@@ -787,16 +864,26 @@ export default function App() {
                         Reload highway list
                       </button>
                     )}
-                    {showMultiHighwayPicker ? (
-                      <>
-                        <p className="sos-hw-prompt">Which highway are you on? Tap yours below.</p>
-                        <HighwayButtonList
-                          corridors={corridors}
-                          selectedId={corridorId}
-                          onSelect={setCorridorId}
-                          disabled={corridorsLoading}
-                        />
-                      </>
+                    {!corridorsLoading && corridors.length > 0 ? (
+                      <label className="sos-select-label">
+                        <span className="sos-km-label-text">Select highway manually</span>
+                        <select
+                          className="sos-km-input sos-select-tight"
+                          value={corridorId}
+                          onChange={(e) => {
+                            const id = e.target.value
+                            setCorridorId(id)
+                            setDetectedCorridorName(corridors.find((c) => c.id === id)?.name || null)
+                          }}
+                        >
+                          <option value="">Choose highway</option>
+                          {corridors.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                     ) : null}
                   </>
                 ) : null}
@@ -807,6 +894,8 @@ export default function App() {
                 <p className="loc-bad" role="status">
                   GPS unavailable — enter details below
                 </p>
+                {detectBusy ? <p className="sos-warn">Detecting highway…</p> : null}
+                {detectMsg ? <p className="loc-ok loc-ok--small">{detectMsg}</p> : null}
                 {corridorsLoading && <p className="sos-warn">Loading highways…</p>}
                 {corridorsError && !corridorsLoading && <p className="sos-warn">{corridorsError}</p>}
                 {!corridorsLoading && (corridorsError || corridors.length === 0) && (
@@ -818,17 +907,6 @@ export default function App() {
                     Reload highway list
                   </button>
                 )}
-                {showMultiHighwayPicker ? (
-                  <>
-                    <p className="sos-hw-prompt">Highway — tap the one you are on</p>
-                    <HighwayButtonList
-                      corridors={corridors}
-                      selectedId={corridorId}
-                      onSelect={setCorridorId}
-                      disabled={corridorsLoading}
-                    />
-                  </>
-                ) : null}
                 <label className="sos-km-label">
                   <span className="sos-km-label-text">Milestone number (optional)</span>
                   <span className="sos-km-hint">If you can see a green milestone stone, enter the number</span>
@@ -843,8 +921,59 @@ export default function App() {
                     inputMode="decimal"
                   />
                 </label>
+                {detectMultiMatches.length > 1 ? (
+                  <>
+                    <p className="sos-hw-prompt">Which highway?</p>
+                    <HighwayButtonList
+                      corridors={detectMultiMatches}
+                      selectedId={corridorId}
+                      onSelect={setCorridorId}
+                      disabled={corridorsLoading}
+                    />
+                    <button
+                      type="button"
+                      className="sos-retry-hw"
+                      onClick={() => {
+                        setCorridorId('')
+                        setDetectMultiMatches([])
+                        setDetectedCorridorName(null)
+                        setDetectMsg('Not sure — search your highway below.')
+                      }}
+                    >
+                      Not sure
+                    </button>
+                  </>
+                ) : null}
+                {!kmValid ? (
+                  <>
+                    <label className="sos-km-label">
+                      <span className="sos-km-label-text">Which highway are you on?</span>
+                      <input
+                        type="text"
+                        className="sos-km-input"
+                        value={highwaySearch}
+                        onChange={(e) => setHighwaySearch(e.target.value)}
+                        placeholder="e.g. NH48"
+                        autoComplete="off"
+                      />
+                    </label>
+                    {filteredCorridors.length > 0 ? (
+                      <HighwayButtonList
+                        corridors={filteredCorridors}
+                        selectedId={corridorId}
+                        onSelect={setCorridorId}
+                        disabled={corridorsLoading}
+                      />
+                    ) : null}
+                  </>
+                ) : null}
               </div>
             )}
+            {corridorId && detectedCorridorName ? (
+              <p className="loc-ok loc-ok--small" role="status">
+                Highway selected: {detectedCorridorName}
+              </p>
+            ) : null}
           </div>
 
           <div className="sos-section">

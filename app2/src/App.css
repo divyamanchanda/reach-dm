@@ -281,6 +281,12 @@
   color: #6ee7b7;
 }
 
+.loc-ok--small {
+  margin-top: 0.45rem;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
 .loc-check {
   display: inline-flex;
   align-items: center;
