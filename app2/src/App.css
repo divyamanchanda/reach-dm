@@ -39,12 +39,21 @@
   line-height: 1.45;
 }
 
-.sos-net-banner--ok {
+/* GPS / location status (online) */
+.sos-net-banner--gps-ok {
   background: #14532d;
   color: #dcfce7;
   border-bottom: 1px solid #166534;
 }
 
+/* GPS loading or unavailable — still online */
+.sos-net-banner--gps-warn {
+  background: #78350f;
+  color: #fef3c7;
+  border-bottom: 1px solid #92400e;
+}
+
+/* Offline — replaces GPS bar */
 .sos-net-banner--bad {
   background: #7f1d1d;
   color: #fecaca;

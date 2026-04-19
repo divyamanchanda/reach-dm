@@ -345,6 +345,12 @@ export default function App() {
     })
   }, [])
 
+  /** Keep GPS warm on the landing screen so the top bar reflects location before SOS. */
+  useEffect(() => {
+    if (phase !== 'landing') return
+    startGps()
+  }, [phase, startGps])
+
   const beginReport = useCallback(() => {
     setError(null)
     setResult(null)
@@ -683,6 +689,24 @@ export default function App() {
   const reportCode = result?.public_report_id ?? ''
   const showReachId = reportCode ? `REACH-${reportCode}` : ''
 
+  const gpsCaptured = locState === 'ok' && geo != null
+  const gpsLoading = locState === 'pending'
+  const showOfflineBanner = !isConnected
+
+  const statusBannerClass = showOfflineBanner
+    ? 'sos-net-banner--bad'
+    : gpsCaptured
+      ? 'sos-net-banner--gps-ok'
+      : 'sos-net-banner--gps-warn'
+
+  const statusBannerText = showOfflineBanner
+    ? '🔴 No internet · SMS fallback active'
+    : gpsCaptured
+      ? '📍 Location captured · Ready to send SOS'
+      : gpsLoading
+        ? '📍 Getting your location...'
+        : '📍 No GPS · Use milestone number to share your location'
+
   const resetToLanding = () => {
     setPhase('landing')
     setResult(null)
@@ -699,14 +723,8 @@ export default function App() {
 
   return (
     <div className={`sos-app ${deliveredBanner ? 'sos-app--delivered' : ''}`}>
-      <div
-        className={`sos-net-banner ${isConnected ? 'sos-net-banner--ok' : 'sos-net-banner--bad'}`}
-        role="status"
-        aria-live="polite"
-      >
-        {isConnected
-          ? '🟢 Internet connected · SOS will send instantly'
-          : '🔴 No internet · SMS fallback active'}
+      <div className={`sos-net-banner ${statusBannerClass}`} role="status" aria-live="polite">
+        {statusBannerText}
       </div>
       {deliveredBanner ? (
         <div className="sos-delivered-banner" role="status">
