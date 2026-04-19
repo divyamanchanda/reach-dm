@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -47,6 +47,37 @@ class CorridorOut(BaseModel):
     is_active: bool
 
     model_config = {"from_attributes": True}
+
+
+class CorridorCreate(BaseModel):
+    """Admin create body for POST /api/corridors (maps `active` → DB `is_active`)."""
+
+    name: str = Field(..., min_length=1)
+    code: str | None = None
+    km_start: float
+    km_end: float
+    active: bool = True
+    start_lat: float | None = Field(None, ge=-90, le=90)
+    start_lng: float | None = Field(None, ge=-180, le=180)
+    end_lat: float | None = Field(None, ge=-90, le=90)
+    end_lng: float | None = Field(None, ge=-180, le=180)
+    waypoints: list[Any] | dict[str, Any] | None = None
+    organisation_id: uuid.UUID | None = None
+
+
+class CorridorUpdate(BaseModel):
+    """Partial update for PUT /api/corridors/{id}."""
+
+    name: str | None = Field(None, min_length=1)
+    code: str | None = None
+    km_start: float | None = None
+    km_end: float | None = None
+    active: bool | None = None
+    start_lat: float | None = Field(None, ge=-90, le=90)
+    start_lng: float | None = Field(None, ge=-180, le=180)
+    end_lat: float | None = Field(None, ge=-90, le=90)
+    end_lng: float | None = Field(None, ge=-180, le=180)
+    waypoints: list[Any] | dict[str, Any] | None = None
 
 
 class CorridorStatsOut(BaseModel):

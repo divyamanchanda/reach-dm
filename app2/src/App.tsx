@@ -705,8 +705,8 @@ export default function App() {
         aria-live="polite"
       >
         {isConnected
-          ? '🟢 Internet connected — SOS will send instantly'
-          : '🔴 No internet — SMS fallback active'}
+          ? '🟢 Internet connected · SOS will send instantly'
+          : '🔴 No internet · SMS fallback active'}
       </div>
       {deliveredBanner ? (
         <div className="sos-delivered-banner" role="status">
@@ -715,39 +715,52 @@ export default function App() {
       ) : null}
       {phase === 'landing' && (
         <div className="sos-landing">
-          {crashDetectionEnabled && permissionUi === 'needs_gesture' ? (
-            <div className="sos-motion-prompt">
-              <p className="sos-motion-prompt-text">Crash detection needs motion sensor access.</p>
-              <button type="button" className="sos-motion-prompt-btn" onClick={() => void requestPermissionFromGesture()}>
-                Enable motion sensors
+          <div className="sos-landing__main">
+            {crashDetectionEnabled && permissionUi === 'needs_gesture' ? (
+              <div className="sos-motion-prompt sos-motion-prompt--landing">
+                <p className="sos-motion-prompt-text">Crash detection needs motion sensor access.</p>
+                <button type="button" className="sos-motion-prompt-btn" onClick={() => void requestPermissionFromGesture()}>
+                  Enable motion sensors
+                </button>
+              </div>
+            ) : null}
+            <div className="sos-landing__center">
+              <button type="button" className="sos-mega" onClick={beginReport}>
+                <span className="sos-mega-title">SOS</span>
+                <span className="sos-mega-sub">Emergency on highway</span>
+                <span className="sos-mega-hint">Tap to report</span>
               </button>
+              <p className="sos-landing__reassure">Your report goes directly to emergency dispatch</p>
             </div>
-          ) : null}
-          <button type="button" className="sos-mega" onClick={beginReport}>
-            <span className="sos-mega-label">Emergency on highway?</span>
-            <span className="sos-mega-action">Tap to report</span>
-          </button>
-          <details className="sos-settings">
-            <summary className="sos-settings-summary">Settings</summary>
-            <label className="sos-settings-row">
-              <input
-                type="checkbox"
-                checked={crashDetectionEnabled}
-                onChange={(e) => {
-                  const on = e.target.checked
-                  writeCrashDetectionEnabled(on)
-                  setCrashDetectionEnabled(on)
-                }}
-              />
-              <span>Crash detection (accelerometer)</span>
-            </label>
-            {permissionUi === 'denied' ? (
-              <p className="sos-settings-hint">Motion permission denied — enable it in browser settings to use crash detection.</p>
-            ) : null}
-            {permissionUi === 'unsupported' ? (
-              <p className="sos-settings-hint">Motion sensors not available in this browser.</p>
-            ) : null}
-          </details>
+          </div>
+          <div className="sos-landing__bottom" role="contentinfo">
+            <span className="sos-landing__crash-status">
+              ● CRASH DETECTION: {crashDetectionEnabled ? 'ON' : 'OFF'}
+            </span>
+            <details className="sos-landing-settings">
+              <summary className="sos-landing-settings-summary">⚙ Settings</summary>
+              <div className="sos-landing-settings-body">
+                <label className="sos-settings-row">
+                  <input
+                    type="checkbox"
+                    checked={crashDetectionEnabled}
+                    onChange={(e) => {
+                      const on = e.target.checked
+                      writeCrashDetectionEnabled(on)
+                      setCrashDetectionEnabled(on)
+                    }}
+                  />
+                  <span>Crash detection (accelerometer)</span>
+                </label>
+                {permissionUi === 'denied' ? (
+                  <p className="sos-settings-hint">Motion permission denied — enable it in browser settings to use crash detection.</p>
+                ) : null}
+                {permissionUi === 'unsupported' ? (
+                  <p className="sos-settings-hint">Motion sensors not available in this browser.</p>
+                ) : null}
+              </div>
+            </details>
+          </div>
         </div>
       )}
 
@@ -1179,7 +1192,7 @@ export default function App() {
         </div>
       )}
 
-      {crashDetectionEnabled && permissionUi === 'granted' && isListening ? (
+      {phase !== 'landing' && crashDetectionEnabled && permissionUi === 'granted' && isListening ? (
         <div className="sos-crash-indicator" role="status">
           Crash detection: ON
         </div>

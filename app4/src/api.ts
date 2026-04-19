@@ -141,6 +141,19 @@ export async function postJson<T>(path: string, token: string, body: unknown): P
   return handleJsonResponse<T>(r)
 }
 
+export async function putJson<T>(path: string, token: string, body: unknown): Promise<T> {
+  const r = await fetch(apiUrl(path), {
+    method: 'PUT',
+    headers: {
+      ...authHeaders(token),
+      'Content-Type': 'application/json',
+    },
+    cache: 'no-store',
+    body: JSON.stringify(body),
+  })
+  return handleJsonResponse<T>(r)
+}
+
 export async function deleteJson(path: string, token: string): Promise<void> {
   const r = await fetch(apiUrl(path), {
     method: 'DELETE',

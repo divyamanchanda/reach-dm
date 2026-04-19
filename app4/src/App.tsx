@@ -13,6 +13,7 @@ import {
   isSessionExpiredError,
   login,
   postJson,
+  putJson,
   setAuthFailureHandler,
   type User,
 } from './api'
@@ -1092,6 +1093,18 @@ export default function App() {
   const [manualEndLng, setManualEndLng] = useState('')
   const [corridorDraft, setCorridorDraft] = useState<CorridorDraft | null>(null)
   const [newCorridorOrgId, setNewCorridorOrgId] = useState('')
+  const [quickName, setQuickName] = useState('')
+  const [quickCode, setQuickCode] = useState('')
+  const [quickKmStart, setQuickKmStart] = useState('')
+  const [quickKmEnd, setQuickKmEnd] = useState('')
+  const [quickActive, setQuickActive] = useState(true)
+  const [corridorSuccess, setCorridorSuccess] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editCode, setEditCode] = useState('')
+  const [editKmStart, setEditKmStart] = useState('')
+  const [editKmEnd, setEditKmEnd] = useState('')
+  const [editActive, setEditActive] = useState(true)
 
   const reportApiErr = useCallback((e: unknown, fallback?: string) => {
     if (isSessionExpiredError(e)) return
@@ -1117,6 +1130,7 @@ export default function App() {
   useEffect(() => {
     setPageErr(null)
     setArchiveStaleInfo(null)
+    setCorridorSuccess(null)
   }, [tab])
 
   const loadDashboard = useCallback(async () => {
@@ -1304,14 +1318,98 @@ export default function App() {
   }
 
   const removeCorridor = async (id: string) => {
-    if (!token || !confirm('Delete this corridor?')) return
+    if (!token || !confirm('Deactivate this corridor? It will be hidden from dispatch and public lists.')) return
     setPageErr(null)
     try {
-      await deleteJson(`/admin/corridors/${id}`, token)
+      await deleteJson(`/corridors/${id}`, token)
+      if (editingId === id) setEditingId(null)
+      setCorridorSuccess('Corridor deactivated.')
       await loadCorridors()
       if (tab === 'map') await loadMap()
     } catch (err: unknown) {
-      reportApiErr(err, 'Failed to delete corridor')
+      reportApiErr(err, 'Failed to deactivate corridor')
+    }
+  }
+
+  const startEditCorridor = (c: CorridorRow) => {
+    setEditingId(c.id)
+    setEditName(c.name)
+    setEditCode(c.code ?? '')
+    setEditKmStart(c.km_start != null ? String(c.km_start) : '')
+    setEditKmEnd(c.km_end != null ? String(c.km_end) : '')
+    setEditActive(c.is_active)
+    setPageErr(null)
+    setCorridorSuccess(null)
+  }
+
+  const cancelEditCorridor = () => {
+    setEditingId(null)
+  }
+
+  const saveCorridorEdit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!token || !editingId) return
+    const ks = parseFloat(editKmStart)
+    const ke = parseFloat(editKmEnd)
+    if (!editName.trim()) {
+      setPageErr('Name is required.')
+      return
+    }
+    if (!Number.isFinite(ks) || !Number.isFinite(ke)) {
+      setPageErr('Enter valid Start KM and End KM.')
+      return
+    }
+    setPageErr(null)
+    try {
+      await putJson(`/corridors/${editingId}`, token, {
+        name: editName.trim(),
+        code: editCode.trim() || null,
+        km_start: ks,
+        km_end: ke,
+        active: editActive,
+      })
+      setEditingId(null)
+      setCorridorSuccess('Corridor updated.')
+      await loadCorridors()
+      if (tab === 'map') await loadMap()
+    } catch (err: unknown) {
+      reportApiErr(err, 'Failed to update corridor')
+    }
+  }
+
+  const quickAddCorridor = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!token) return
+    const ks = parseFloat(quickKmStart)
+    const ke = parseFloat(quickKmEnd)
+    if (!quickName.trim()) {
+      setPageErr('Name is required.')
+      return
+    }
+    if (!Number.isFinite(ks) || !Number.isFinite(ke)) {
+      setPageErr('Enter valid Start KM and End KM.')
+      return
+    }
+    setPageErr(null)
+    try {
+      await postJson('/corridors', token, {
+        name: quickName.trim(),
+        code: quickCode.trim() || null,
+        km_start: ks,
+        km_end: ke,
+        active: quickActive,
+        organisation_id: newCorridorOrgId || null,
+      })
+      setQuickName('')
+      setQuickCode('')
+      setQuickKmStart('')
+      setQuickKmEnd('')
+      setQuickActive(true)
+      setCorridorSuccess('Corridor created.')
+      await loadCorridors()
+      if (tab === 'map') await loadMap()
+    } catch (err: unknown) {
+      reportApiErr(err, 'Failed to add corridor')
     }
   }
 
@@ -1434,18 +1532,23 @@ export default function App() {
     }
     setPageErr(null)
     try {
-      await postJson('/admin/corridors', token, {
+      await postJson('/corridors', token, {
         name: corridorDraft.name,
         code: corridorDraft.code,
+        km_start: 0,
+        km_end: corridorDraft.km_length,
+        active: true,
         start_lat: corridorDraft.start_lat,
         start_lng: corridorDraft.start_lng,
         end_lat: corridorDraft.end_lat,
         end_lng: corridorDraft.end_lng,
-        km_length: corridorDraft.km_length,
+        waypoints: routePath ? routePath.map((p) => ({ lat: p.lat, lng: p.lng })) : null,
         organisation_id: newCorridorOrgId || null,
       })
       resetCorridorForm()
+      setCorridorSuccess('Corridor created.')
       await loadCorridors()
+      if (tab === 'map') await loadMap()
     } catch (err: unknown) {
       reportApiErr(err, 'Failed to add corridor')
     }
@@ -1791,8 +1894,86 @@ export default function App() {
           <>
             <h2>Corridors</h2>
             {pageErr && <p className="err">{pageErr}</p>}
-            <form className="form-panel" onSubmit={(e) => void addCorridor(e)}>
-              <h3>Create corridor (real geo coordinates)</h3>
+            {corridorSuccess && <p className="hint" style={{ color: 'var(--ok, #0a7)', fontWeight: 600 }}>{corridorSuccess}</p>}
+            <form className="form-panel" onSubmit={(e) => void quickAddCorridor(e)}>
+              <h3>Add corridor</h3>
+              <p className="hint" style={{ margin: '0 0 0.75rem', fontSize: '0.9rem' }}>
+                Create a corridor by name, highway code, and KM range. Organisation defaults to the first in the list if unset.
+              </p>
+              <div className="form-row grid-manual-coords">
+                <label>
+                  Name
+                  <input value={quickName} onChange={(e) => setQuickName(e.target.value)} placeholder="e.g. NH48 South" required />
+                </label>
+                <label>
+                  Code (e.g. NH44)
+                  <input value={quickCode} onChange={(e) => setQuickCode(e.target.value)} placeholder="NH44" />
+                </label>
+                <label>
+                  Start KM
+                  <input value={quickKmStart} onChange={(e) => setQuickKmStart(e.target.value)} inputMode="decimal" required />
+                </label>
+                <label>
+                  End KM
+                  <input value={quickKmEnd} onChange={(e) => setQuickKmEnd(e.target.value)} inputMode="decimal" required />
+                </label>
+              </div>
+              <div className="form-row">
+                <label>Organisation</label>
+                <select value={newCorridorOrgId} onChange={(e) => setNewCorridorOrgId(e.target.value)}>
+                  {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </div>
+              <div className="form-row">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input type="checkbox" checked={quickActive} onChange={(e) => setQuickActive(e.target.checked)} />
+                  Active
+                </label>
+              </div>
+              <button type="submit">Create corridor</button>
+            </form>
+
+            {editingId && (
+              <form className="form-panel" onSubmit={(e) => void saveCorridorEdit(e)} style={{ marginTop: '1rem' }}>
+                <h3>Edit corridor</h3>
+                <div className="form-row grid-manual-coords">
+                  <label>
+                    Name
+                    <input value={editName} onChange={(e) => setEditName(e.target.value)} required />
+                  </label>
+                  <label>
+                    Code
+                    <input value={editCode} onChange={(e) => setEditCode(e.target.value)} placeholder="NH44" />
+                  </label>
+                  <label>
+                    Start KM
+                    <input value={editKmStart} onChange={(e) => setEditKmStart(e.target.value)} inputMode="decimal" required />
+                  </label>
+                  <label>
+                    End KM
+                    <input value={editKmEnd} onChange={(e) => setEditKmEnd(e.target.value)} inputMode="decimal" required />
+                  </label>
+                </div>
+                <div className="form-row">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <input type="checkbox" checked={editActive} onChange={(e) => setEditActive(e.target.checked)} />
+                    Active
+                  </label>
+                </div>
+                <div className="inline-row" style={{ gap: '0.5rem' }}>
+                  <button type="submit">Save changes</button>
+                  <button type="button" onClick={cancelEditCorridor}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <form className="form-panel" onSubmit={(e) => void addCorridor(e)} style={{ marginTop: '1.25rem' }}>
+              <h3>Advanced: map &amp; coordinates</h3>
+              <p className="hint" style={{ margin: '0 0 0.75rem', fontSize: '0.9rem' }}>
+                Organisation is taken from the <strong>Add corridor</strong> form above (defaults to the first organisation when you open this tab).
+              </p>
               <div className="segmented">
                 <button
                   className={corridorCreateMode === 'search' ? 'active' : ''}
@@ -1908,12 +2089,6 @@ export default function App() {
                   />
                 </div>
               )}
-              <div className="form-row">
-                <label>Organisation</label>
-                <select value={newCorridorOrgId} onChange={(e) => setNewCorridorOrgId(e.target.value)}>
-                  {orgs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-                </select>
-              </div>
               <div className="confirm-box">
                 <h4>Confirmation</h4>
                 <div>Name: {corridorDraft?.name ?? '—'}</div>
@@ -1929,17 +2104,37 @@ export default function App() {
             </form>
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Name</th><th>Start (lat,lng)</th><th>End (lat,lng)</th><th>KM length</th><th>Active</th><th /></tr></thead>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Code</th>
+                    <th>Start (lat,lng)</th>
+                    <th>End (lat,lng)</th>
+                    <th>KM range</th>
+                    <th>Active</th>
+                    <th />
+                  </tr>
+                </thead>
                 <tbody>
                   {corridors.map((c) => (
                     <tr key={c.id}>
                       <td>{c.name}</td>
+                      <td>{c.code ?? '—'}</td>
                       <td>{c.start_lat != null && c.start_lng != null ? `${c.start_lat.toFixed(4)}, ${c.start_lng.toFixed(4)}` : '—'}</td>
                       <td>{c.end_lat != null && c.end_lng != null ? `${c.end_lat.toFixed(4)}, ${c.end_lng.toFixed(4)}` : '—'}</td>
-                      <td>{c.km_end != null ? c.km_end.toFixed(2) : '—'}</td>
+                      <td>
+                        {c.km_start != null && c.km_end != null
+                          ? `${c.km_start.toFixed(1)} – ${c.km_end.toFixed(1)}`
+                          : '—'}
+                      </td>
                       <td>{c.is_active ? 'Yes' : 'No'}</td>
                       <td>
-                        <button type="button" className="btn-danger" onClick={() => void removeCorridor(c.id)}>Delete</button>
+                        <button type="button" onClick={() => startEditCorridor(c)} style={{ marginRight: '0.35rem' }}>
+                          Edit
+                        </button>
+                        <button type="button" className="btn-danger" onClick={() => void removeCorridor(c.id)} disabled={!c.is_active}>
+                          Deactivate
+                        </button>
                       </td>
                     </tr>
                   ))}
