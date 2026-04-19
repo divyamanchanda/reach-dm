@@ -24,7 +24,9 @@ from app.schemas import (
 from app.security import get_current_user, require_role
 from app.services.public_incident import create_public_incident_row
 from app.services.corridor_detection import detect_corridor
+from app.services.audit_log import log_audit
 from app.services.incident_lifecycle import expire_stale_open_incidents, incident_eligible_for_operator_reassign
+from app.services.vehicle_sync import sync_vehicle_statuses_with_incidents
 from app.routers.incidents import _push_corridor_stats, _push_incident_new
 
 router = APIRouter(prefix="/corridors", tags=["corridors"])
@@ -72,7 +74,7 @@ def list_corridors(db: Session = Depends(get_db), user: User = Depends(get_curre
 def create_corridor(
     data: CorridorCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(admin_only),
+    user: User = Depends(admin_only),
 ):
     org_id = data.organisation_id or _default_organisation_id(db)
     code_val = data.code.strip() if data.code else None
@@ -85,6 +87,7 @@ def create_corridor(
         km_start=data.km_start,
         km_end=data.km_end,
         is_active=data.active,
+        auto_dispatch_enabled=data.auto_dispatch_enabled,
         start_lat=data.start_lat,
         start_lng=data.start_lng,
         end_lat=data.end_lat,
@@ -94,6 +97,13 @@ def create_corridor(
     db.add(corridor)
     db.commit()
     db.refresh(corridor)
+    log_audit(
+        user=user,
+        action="corridor_created",
+        entity_type="corridor",
+        entity_id=corridor.id,
+        details={"name": corridor.name, "code": corridor.code},
+    )
     return CorridorOut.model_validate(corridor)
 
 
@@ -124,6 +134,8 @@ def update_corridor(
     for key in ("km_start", "km_end", "start_lat", "start_lng", "end_lat", "end_lng", "waypoints"):
         if key in patch:
             setattr(corridor, key, patch.pop(key))
+    if "auto_dispatch_enabled" in patch:
+        corridor.auto_dispatch_enabled = patch.pop("auto_dispatch_enabled")
     db.commit()
     db.refresh(corridor)
     return CorridorOut.model_validate(corridor)
@@ -194,6 +206,7 @@ def list_incidents(
     user: User = Depends(get_current_user),
 ):
     expire_stale_open_incidents(db)
+    sync_vehicle_statuses_with_incidents(db, commit=True)
     q = (
         select(Incident, Incident.lat.label("lat"), Incident.lng.label("lng"))
         .where(Incident.corridor_id == corridor_id)

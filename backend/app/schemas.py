@@ -45,6 +45,7 @@ class CorridorOut(BaseModel):
     km_start: float | None
     km_end: float | None
     is_active: bool
+    auto_dispatch_enabled: bool = True
 
     model_config = {"from_attributes": True}
 
@@ -57,6 +58,7 @@ class CorridorCreate(BaseModel):
     km_start: float
     km_end: float
     active: bool = True
+    auto_dispatch_enabled: bool = True
     start_lat: float | None = Field(None, ge=-90, le=90)
     start_lng: float | None = Field(None, ge=-180, le=180)
     end_lat: float | None = Field(None, ge=-90, le=90)
@@ -78,6 +80,7 @@ class CorridorUpdate(BaseModel):
     end_lat: float | None = Field(None, ge=-90, le=90)
     end_lng: float | None = Field(None, ge=-180, le=180)
     waypoints: list[Any] | dict[str, Any] | None = None
+    auto_dispatch_enabled: bool | None = None
 
 
 class CorridorStatsOut(BaseModel):
@@ -277,11 +280,27 @@ class VehicleMapOut(BaseModel):
 
 
 class AdminDashboardOut(BaseModel):
+    """Dashboard KPIs including resolution_rate = (closed + cleared) / all incidents."""
+
     active_incidents: int
     total_vehicles: int
     total_corridors: int
     dispatched_incidents: int
     closed_today: int
+    resolution_rate: float | None = None
+
+
+class AuditLogEntryOut(BaseModel):
+    id: uuid.UUID
+    timestamp: datetime
+    user_id: uuid.UUID | None = None
+    user_name: str | None = None
+    action: str
+    entity_type: str
+    entity_id: uuid.UUID | None = None
+    details: dict | None = None
+
+    model_config = {"from_attributes": True}
 
 
 class AdminArchiveStaleOut(BaseModel):

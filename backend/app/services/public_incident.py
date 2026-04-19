@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.schemas import NearbyVehicleOut, PublicIncidentCreate, PublicIncidentResponse
+from app.services.audit_log import log_audit
 from app.services.dispatch import NEARBY_VEHICLE_DRIVER_JOIN, NEARBY_VEHICLE_ORDER_BY
 from app.services.trust_score import compute_trust_public_sos, count_nearby_reports
 
@@ -193,6 +194,17 @@ def create_public_incident_row(
         },
     )
     db.commit()
+    log_audit(
+        action="incident_created",
+        entity_type="incident",
+        entity_id=new_id,
+        user_name="Public SOS",
+        details={
+            "corridor_id": str(corridor_id),
+            "reporter_type": reporter_type,
+            "source": event_source,
+        },
+    )
     eta = nearest_available_ambulance_eta(db, new_id)
     return PublicIncidentResponse(
         incident_id=new_id,

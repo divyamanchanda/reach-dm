@@ -24,7 +24,7 @@ ORDER BY
 """
 
 
-def run_dispatch(db: Session, *, incident_id: uuid.UUID, vehicle_id: uuid.UUID) -> Dispatch:
+def run_dispatch(db: Session, *, incident_id: uuid.UUID, vehicle_id: uuid.UUID, auto: bool = False) -> Dispatch:
     """Single transaction: lock rows, validate, write dispatch + timeline + vehicle/incident updates."""
     try:
         inc_row = db.execute(
@@ -71,9 +71,21 @@ def run_dispatch(db: Session, *, incident_id: uuid.UUID, vehicle_id: uuid.UUID) 
     ev = IncidentEvent(
         incident_id=incident_id,
         event_type="dispatch",
-        payload={"vehicle_id": str(vehicle_id), "cross_boundary": cross_boundary},
+        payload={
+            "vehicle_id": str(vehicle_id),
+            "cross_boundary": cross_boundary,
+            **({"auto": True} if auto else {}),
+        },
     )
     db.add(ev)
+    if auto:
+        db.add(
+            IncidentEvent(
+                incident_id=incident_id,
+                event_type="auto_dispatched",
+                payload={"vehicle_id": str(vehicle_id)},
+            )
+        )
     db.commit()
     db.refresh(dispatch)
     return dispatch

@@ -19,12 +19,18 @@ from app.schemas import (
     TimelineEventOut,
 )
 from app.security import get_current_user, require_role
+from app.services.audit_log import log_audit
 from app.services.dispatch import run_dispatch
 from app.services.incident_lifecycle import driver_decline_incident, reassign_incident
 from app.services.public_incident import list_nearby_ambulances
+from app.services.vehicle_sync import sync_vehicle_statuses_with_incidents
 from app.socket_server import emit_to_corridor
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
+
+_TERMINAL_INCIDENT_STATUSES = frozenset(
+    {"closed", "cleared", "cancelled", "recalled", "expired", "archived"},
+)
 
 
 def incident_to_detail_out(db: Session, inc: Incident) -> IncidentDetailOut:
@@ -135,6 +141,13 @@ def dispatch_incident(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
     cid = inc_before.corridor_id
     dispatch = run_dispatch(db, incident_id=incident_id, vehicle_id=body.vehicle_id)
+    log_audit(
+        user=user,
+        action="incident_dispatched",
+        entity_type="incident",
+        entity_id=incident_id,
+        details={"vehicle_id": str(body.vehicle_id), "dispatch_id": str(dispatch.id)},
+    )
     payload = {
         "incident_id": str(incident_id),
         "vehicle_id": str(body.vehicle_id),
@@ -215,6 +228,24 @@ def patch_incident_status(
         )
     )
     db.commit()
+    if body.status in _TERMINAL_INCIDENT_STATUSES:
+        sync_vehicle_statuses_with_incidents(db, commit=True)
+    if body.status in ("closed", "cleared"):
+        log_audit(
+            user=user,
+            action="incident_closed",
+            entity_type="incident",
+            entity_id=incident_id,
+            details={"status": body.status},
+        )
+    elif body.status in _TERMINAL_INCIDENT_STATUSES:
+        log_audit(
+            user=user,
+            action="incident_status_changed",
+            entity_type="incident",
+            entity_id=incident_id,
+            details={"status": body.status},
+        )
     background_tasks.add_task(_push_incident_updated, inc.corridor_id, {"incident_id": str(incident_id)})
     background_tasks.add_task(_push_corridor_stats, inc.corridor_id)
     return {"ok": True}
@@ -265,6 +296,7 @@ def recall_incident(
     if dispatched_vehicle:
         payload["vehicle_id"] = str(dispatched_vehicle["vehicle_id"])
     db.commit()
+    sync_vehicle_statuses_with_incidents(db, commit=True)
     background_tasks.add_task(_push_recalled, inc.corridor_id, payload)
     background_tasks.add_task(_push_incident_updated, inc.corridor_id, {"incident_id": str(incident_id)})
     background_tasks.add_task(_push_corridor_stats, inc.corridor_id)
@@ -292,6 +324,15 @@ def verify_incident(
         )
     )
     db.commit()
+    if body.status in _TERMINAL_INCIDENT_STATUSES:
+        sync_vehicle_statuses_with_incidents(db, commit=True)
+    log_audit(
+        user=user,
+        action="incident_verified",
+        entity_type="incident",
+        entity_id=incident_id,
+        details={"trust_score": body.trust_score, "status": body.status},
+    )
     background_tasks.add_task(_push_incident_updated, inc.corridor_id, {"incident_id": str(incident_id)})
     background_tasks.add_task(_push_corridor_stats, inc.corridor_id)
     return {"ok": True, "incident_id": str(incident_id), "trust_score": body.trust_score, "status": body.status}

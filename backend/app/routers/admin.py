@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.geo_utils import incident_lat_lng, nh48_km_from_lat_lng
 from app.models import (
+    AuditLog,
     BroadcastMessage,
     Corridor,
     Dispatch,
@@ -37,6 +38,7 @@ from app.schemas import (
     AdminVehicleDashboardOut,
     AdminUserCreateBody,
     AnalyticsIncidentRowOut,
+    AuditLogEntryOut,
     BroadcastBody,
     CorridorOut,
     LiveMapCorridorOut,
@@ -50,6 +52,7 @@ from app.schemas import (
     UserPublic,
 )
 from app.security import hash_password, require_role
+from app.services.audit_log import log_audit
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -246,13 +249,35 @@ def admin_dashboard(
     ).scalar_one()
     v_count = db.execute(select(func.count()).select_from(Vehicle)).scalar_one()
     c_count = db.execute(select(func.count()).select_from(Corridor)).scalar_one()
+    total_all, resolved_closed = db.execute(
+        text(
+            """
+            SELECT COUNT(*)::int,
+              COUNT(*) FILTER (WHERE status IN ('closed', 'cleared'))::int
+            FROM incidents
+            """
+        )
+    ).one()
+    resolution_rate = (
+        round(100.0 * int(resolved_closed) / int(total_all), 2) if int(total_all) > 0 else None
+    )
     return AdminDashboardOut(
         active_incidents=int(active),
         total_vehicles=int(v_count),
         total_corridors=int(c_count),
         dispatched_incidents=int(dispatched),
         closed_today=int(closed_today),
+        resolution_rate=resolution_rate,
     )
+
+
+@router.get("/audit-log", response_model=list[AuditLogEntryOut])
+def list_audit_log(
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+):
+    rows = db.execute(select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(100)).scalars().all()
+    return [AuditLogEntryOut.model_validate(r) for r in rows]
 
 
 @router.post("/incidents/archive-stale", response_model=AdminArchiveStaleOut)
@@ -521,7 +546,7 @@ def list_corridors_admin(
 def create_corridor(
     body: AdminCorridorCreateBody,
     db: Session = Depends(get_db),
-    _: User = Depends(admin_user),
+    user: User = Depends(admin_user),
 ):
     org_id = body.organisation_id or _default_organisation_id(db)
     corridor = Corridor(
@@ -535,10 +560,18 @@ def create_corridor(
         km_start=0.0,
         km_end=body.km_length,
         is_active=True,
+        auto_dispatch_enabled=True,
     )
     db.add(corridor)
     db.commit()
     db.refresh(corridor)
+    log_audit(
+        user=user,
+        action="corridor_created",
+        entity_type="corridor",
+        entity_id=corridor.id,
+        details={"name": corridor.name, "source": "admin_ui"},
+    )
     return CorridorOut.model_validate(corridor)
 
 

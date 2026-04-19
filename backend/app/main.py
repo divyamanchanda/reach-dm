@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import json
 from fastapi import FastAPI
@@ -6,7 +7,7 @@ import socketio
 from sqlalchemy import text
 
 from app.config import settings
-from app.database import engine
+from app.database import SessionLocal, engine
 from app.routers import admin, auth, corridor_detect, corridors, health, incidents, public, sms, vehicles
 from app.socket_server import sio
 
@@ -84,6 +85,28 @@ def ensure_coordinate_columns() -> None:
             )
         )
         conn.execute(text("ALTER TABLE broadcast_messages ADD COLUMN IF NOT EXISTS priority TEXT"))
+        conn.execute(
+            text(
+                "ALTER TABLE corridors ADD COLUMN IF NOT EXISTS auto_dispatch_enabled BOOLEAN NOT NULL DEFAULT true"
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS audit_log (
+                  id UUID PRIMARY KEY,
+                  timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+                  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                  user_name TEXT,
+                  action TEXT NOT NULL,
+                  entity_type TEXT NOT NULL,
+                  entity_id UUID,
+                  details JSONB
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log (timestamp DESC)"))
         nh48_points = [
             {"lat": 12.9716, "lng": 77.5946},
             {"lat": 12.7409, "lng": 77.8253},
@@ -115,5 +138,32 @@ def ensure_coordinate_columns() -> None:
                 "wps": json.dumps(nh48_points),
             },
         )
+
+
+@fastapi_app.on_event("startup")
+async def start_background_maintenance() -> None:
+    from app.services.vehicle_sync import run_maintenance_cycle
+    from app.socket_server import emit_to_corridor
+
+    async def loop() -> None:
+        await asyncio.sleep(25)
+        while True:
+            db = SessionLocal()
+            try:
+                _metrics, notes = run_maintenance_cycle(db)
+                for cid, msg in notes:
+                    await emit_to_corridor(
+                        "operator_alert",
+                        cid,
+                        {"message": msg, "kind": "auto_dispatch"},
+                    )
+            except Exception:
+                logging.getLogger("uvicorn.error").exception("background maintenance")
+            finally:
+                db.close()
+            await asyncio.sleep(300)
+
+    asyncio.create_task(loop())
+
 
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app, socketio_path="socket.io")

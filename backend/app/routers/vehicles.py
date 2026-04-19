@@ -16,6 +16,7 @@ from app.schemas import (
     VehicleStatusBody,
 )
 from app.security import get_current_user, require_role
+from app.services.audit_log import log_audit
 from app.routers.incidents import incident_to_detail_out
 from app.socket_server import emit_to_corridor
 
@@ -109,7 +110,7 @@ def list_vehicle_dispatched_incidents(
             SELECT i.id
             FROM incidents i
             INNER JOIN dispatches d ON d.incident_id = i.id AND d.vehicle_id = :vid
-            WHERE i.status NOT IN ('closed', 'cancelled', 'archived')
+            WHERE i.status NOT IN ('closed', 'cancelled', 'archived', 'expired', 'recalled')
             ORDER BY d.created_at DESC
             LIMIT 10
             """
@@ -168,6 +169,13 @@ def patch_vehicle_status(
     v.status = body.status
     v.is_available = body.status == "available"
     db.commit()
+    log_audit(
+        user=user,
+        action="vehicle_status_changed",
+        entity_type="vehicle",
+        entity_id=vehicle_id,
+        details={"status": body.status, "is_available": v.is_available},
+    )
     background_tasks.add_task(
         _push_vehicle_status,
         v.corridor_id,
