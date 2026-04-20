@@ -1,9 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import L from 'leaflet'
 import { latLngBounds } from 'leaflet'
-import { CircleMarker, MapContainer, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet'
+import {
+  CircleMarker,
+  MapContainer,
+  Polyline,
+  Popup,
+  TileLayer,
+  Tooltip,
+  useMap,
+  useMapEvents,
+} from 'react-leaflet'
 import { io, Socket } from 'socket.io-client'
 import './App.css'
 import { API, apiUrl, fetchJson, login, patchJson, postJson, type User } from './api'
+import {
+  NH48_KM_LENGTH,
+  latLngFromOfficialKm,
+  locationStackKey,
+  nh48LeafletLatLngs,
+  officialKmFromSnappedPoint,
+  snapGpsToNH48Polyline,
+  stackOffsetLayerPixels,
+} from './nh48Route'
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000
 
@@ -176,17 +195,6 @@ function isStatusExpired(status: string): boolean {
 
 const AVG_CORRIDOR_KMH = 80
 
-/** NH48 Bengaluru → Chennai corridor length used for KM interpolation and vehicle ETA projection. */
-const NH48_TOTAL_KM = 312
-
-const NH48_ROUTE_LINE: [number, number][] = [
-  [12.9716, 77.5946],
-  [12.7409, 77.8253],
-  [12.5266, 78.2137],
-  [12.9165, 79.1325],
-  [13.0827, 80.2707],
-]
-
 function hasValidKmMarker(km: number | null | undefined): km is number {
   return km != null && Number.isFinite(km)
 }
@@ -198,16 +206,19 @@ function formatHeaderAvgDispatchMinutes(raw: number | null): string {
   return `${capped.toFixed(1)} min`
 }
 
-function kmFromLatLng(lat: number, lng: number): number {
-  const bengaluru = { lat: 12.9716, lng: 77.5946 }
-  const chennai = { lat: 13.0827, lng: 80.2707 }
-  const dx = chennai.lng - bengaluru.lng
-  const dy = chennai.lat - bengaluru.lat
-  const px = lng - bengaluru.lng
-  const py = lat - bengaluru.lat
-  const denom = dx * dx + dy * dy
-  const t = denom > 0 ? Math.max(0, Math.min(1, (px * dx + py * dy) / denom)) : 0
-  return t * NH48_TOTAL_KM
+function vehicleKmAlongCorridor(lat: number, lng: number): number {
+  const snap = snapGpsToNH48Polyline(lat, lng)
+  return officialKmFromSnappedPoint(snap)
+}
+
+function incidentKmForEta(i: Incident): number | null {
+  if (hasValidKmMarker(i.km_marker)) {
+    return Math.max(0, Math.min(NH48_KM_LENGTH, Number(i.km_marker)))
+  }
+  if (hasIncidentGps(i.latitude, i.longitude)) {
+    return officialKmFromSnappedPoint(snapGpsToNH48Polyline(i.latitude!, i.longitude!))
+  }
+  return null
 }
 
 function etaMinutesFromKmGap(kmA: number, kmB: number): number {
@@ -339,12 +350,13 @@ function incidentCardEta(
   vehicles: CorridorVehicle[],
 ): string | null {
   if (i.status !== 'dispatched' || !assigned) return null
-  if (i.km_marker == null || !Number.isFinite(i.km_marker)) return null
+  const ik = incidentKmForEta(i)
+  if (ik == null) return null
   const v = vehicles.find((x) => x.id === assigned.vehicle_id)
   if (v?.latitude == null || v?.longitude == null) return null
   if (!Number.isFinite(v.latitude) || !Number.isFinite(v.longitude)) return null
-  const vk = kmFromLatLng(v.latitude, v.longitude)
-  const mins = etaMinutesFromKmGap(vk, i.km_marker)
+  const vk = vehicleKmAlongCorridor(v.latitude, v.longitude)
+  const mins = etaMinutesFromKmGap(vk, ik)
   return `ETA: ${mins} mins`
 }
 
@@ -607,25 +619,116 @@ function humanizeDispatchFailure(e: unknown): { line: string; hint: string } {
   }
 }
 
-function estimatePointFromKm(km: number): { lat: number; lng: number } {
-  const bengaluru = { lat: 12.9716, lng: 77.5946 }
-  const chennai = { lat: 13.0827, lng: 80.2707 }
-  const t = Math.min(1, Math.max(0, km / NH48_TOTAL_KM))
-  return {
-    lat: bengaluru.lat + (chennai.lat - bengaluru.lat) * t,
-    lng: bengaluru.lng + (chennai.lng - bengaluru.lng) * t,
-  }
+function vehicleOverviewFill(status: string): string {
+  const s = status.toLowerCase()
+  if (s === 'available' || s === 'idle') return '#0ea5e9'
+  if (s === 'dispatched' || s === 'en_route' || s === 'transporting') return '#8b5cf6'
+  if (s === 'on_scene') return '#06b6d4'
+  return '#64748b'
 }
 
-function incidentMapPoint(i: Incident): [number, number] | null {
-  if (hasIncidentGps(i.latitude, i.longitude)) {
-    return [i.latitude as number, i.longitude as number]
-  }
-  if (hasValidKmMarker(i.km_marker)) {
-    const p = estimatePointFromKm(Number(i.km_marker))
-    return [p.lat, p.lng]
-  }
-  return null
+type OverviewMapItem =
+  | { kind: 'inc'; inc: Incident; ll: { lat: number; lng: number } }
+  | { kind: 'veh'; v: CorridorVehicle; ll: { lat: number; lng: number } }
+
+function Nh48CorridorStackedMarkers({
+  incidents,
+  vehicles,
+  onSelectIncident,
+}: {
+  incidents: Incident[]
+  vehicles: CorridorVehicle[]
+  onSelectIncident: (id: string) => void
+}) {
+  const map = useMap()
+  const [rev, setRev] = useState(0)
+  useMapEvents({
+    zoomend: () => setRev((r) => r + 1),
+    moveend: () => setRev((r) => r + 1),
+  })
+
+  const placed = useMemo(() => {
+    const items: OverviewMapItem[] = []
+    for (const i of incidents) {
+      if (isTerminalSortStatus(i.status)) continue
+      let ll: { lat: number; lng: number } | null = null
+      if (hasIncidentGps(i.latitude, i.longitude)) {
+        ll = snapGpsToNH48Polyline(i.latitude!, i.longitude!)
+      } else if (hasValidKmMarker(i.km_marker)) {
+        ll = latLngFromOfficialKm(Number(i.km_marker))
+      }
+      if (!ll) continue
+      items.push({ kind: 'inc', inc: i, ll })
+    }
+    for (const v of vehicles) {
+      if (v.latitude == null || v.longitude == null) continue
+      if (!Number.isFinite(v.latitude) || !Number.isFinite(v.longitude)) continue
+      const ll = snapGpsToNH48Polyline(v.latitude, v.longitude)
+      items.push({ kind: 'veh', v, ll })
+    }
+    const groups = new Map<string, OverviewMapItem[]>()
+    for (const it of items) {
+      const k = locationStackKey(it.ll.lat, it.ll.lng)
+      if (!groups.has(k)) groups.set(k, [])
+      groups.get(k)!.push(it)
+    }
+    const out: { item: OverviewMapItem; at: [number, number] }[] = []
+    for (const arr of groups.values()) {
+      arr.forEach((it, idx) => {
+        const base = L.latLng(it.ll.lat, it.ll.lng)
+        const { dx, dy } = stackOffsetLayerPixels(idx, arr.length)
+        const pt = map.latLngToLayerPoint(base)
+        const at = map.layerPointToLatLng(L.point(pt.x + dx, pt.y + dy))
+        out.push({ item: it, at: [at.lat, at.lng] })
+      })
+    }
+    return out
+  }, [incidents, vehicles, map, rev])
+
+  return (
+    <>
+      {placed.map(({ item, at }) =>
+        item.kind === 'inc' ? (
+          <CircleMarker
+            key={`inc-${item.inc.id}`}
+            center={at}
+            radius={8}
+            pathOptions={{
+              color: '#0f172a',
+              weight: 2,
+              fillColor: severityColor[item.inc.severity] ?? '#ef4444',
+              fillOpacity: 0.9,
+            }}
+            eventHandlers={{ click: () => onSelectIncident(item.inc.id) }}
+          >
+            <Popup>
+              {humanizeIncidentType(item.inc.incident_type)}
+              <br />
+              <span className="map-popup-sub">{item.inc.status}</span>
+            </Popup>
+          </CircleMarker>
+        ) : (
+          <CircleMarker
+            key={`veh-${item.v.id}`}
+            center={at}
+            radius={7}
+            pathOptions={{
+              color: '#0f172a',
+              weight: 2,
+              fillColor: vehicleOverviewFill(item.v.status),
+              fillOpacity: 0.92,
+            }}
+          >
+            <Popup>
+              {item.v.label}
+              <br />
+              <span className="map-popup-sub">{item.v.status}</span>
+            </Popup>
+          </CircleMarker>
+        ),
+      )}
+    </>
+  )
 }
 
 function OverviewFitBounds({ latLngs }: { latLngs: [number, number][] }) {
@@ -643,20 +746,34 @@ function OverviewFitBounds({ latLngs }: { latLngs: [number, number][] }) {
 
 function DispatchCorridorOverviewMap({
   incidents,
+  vehicles,
   onSelectIncident,
 }: {
   incidents: Incident[]
+  vehicles: CorridorVehicle[]
   onSelectIncident: (id: string) => void
 }) {
+  const routeLine = useMemo(() => nh48LeafletLatLngs(), [])
   const latLngs = useMemo(() => {
-    const pts: [number, number][] = NH48_ROUTE_LINE.map((p) => [p[0], p[1]])
+    const pts: [number, number][] = routeLine.map((p) => [p[0], p[1]])
     for (const i of incidents) {
       if (isTerminalSortStatus(i.status)) continue
-      const pt = incidentMapPoint(i)
-      if (pt) pts.push(pt)
+      let ll: { lat: number; lng: number } | null = null
+      if (hasIncidentGps(i.latitude, i.longitude)) {
+        ll = snapGpsToNH48Polyline(i.latitude!, i.longitude!)
+      } else if (hasValidKmMarker(i.km_marker)) {
+        ll = latLngFromOfficialKm(Number(i.km_marker))
+      }
+      if (ll) pts.push([ll.lat, ll.lng])
+    }
+    for (const v of vehicles) {
+      if (v.latitude == null || v.longitude == null) continue
+      if (!Number.isFinite(v.latitude) || !Number.isFinite(v.longitude)) continue
+      const ll = snapGpsToNH48Polyline(v.latitude, v.longitude)
+      pts.push([ll.lat, ll.lng])
     }
     return pts
-  }, [incidents])
+  }, [incidents, vehicles, routeLine])
 
   return (
     <div className="dispatch-overview-map-wrap">
@@ -671,35 +788,20 @@ function DispatchCorridorOverviewMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <Polyline
-          positions={NH48_ROUTE_LINE}
-          pathOptions={{ color: '#2563eb', weight: 4, opacity: 0.92, lineCap: 'round' }}
+          positions={routeLine}
+          pathOptions={{
+            color: '#2563eb',
+            weight: 4,
+            opacity: 0.92,
+            lineCap: 'round',
+            lineJoin: 'round',
+          }}
         />
-        {incidents.map((i) => {
-          if (isTerminalSortStatus(i.status)) return null
-          const pt = incidentMapPoint(i)
-          if (!pt) return null
-          const fill = severityColor[i.severity] ?? '#ef4444'
-          return (
-            <CircleMarker
-              key={i.id}
-              center={pt}
-              radius={8}
-              pathOptions={{
-                color: '#0f172a',
-                weight: 2,
-                fillColor: fill,
-                fillOpacity: 0.9,
-              }}
-              eventHandlers={{ click: () => onSelectIncident(i.id) }}
-            >
-              <Popup>
-                {humanizeIncidentType(i.incident_type)}
-                <br />
-                <span className="map-popup-sub">{i.status}</span>
-              </Popup>
-            </CircleMarker>
-          )
-        })}
+        <Nh48CorridorStackedMarkers
+          incidents={incidents}
+          vehicles={vehicles}
+          onSelectIncident={onSelectIncident}
+        />
         <OverviewFitBounds latLngs={latLngs} />
       </MapContainer>
     </div>
@@ -1571,7 +1673,11 @@ function App() {
               <p className="detail-overview-hint">
                 Active incidents are shown on the map. Select a dot or choose an incident from the list.
               </p>
-              <DispatchCorridorOverviewMap incidents={incidents} onSelectIncident={setSelectedId} />
+              <DispatchCorridorOverviewMap
+                incidents={incidents}
+                vehicles={corridorVehicles}
+                onSelectIncident={setSelectedId}
+              />
             </div>
           )}
           {selected && (
@@ -1650,27 +1756,36 @@ function App() {
                     const hasGps =
                       lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
                     const kmNum = km != null && Number.isFinite(km) ? Number(km) : null
-                    const fromKm =
-                      !hasGps && kmNum != null ? estimatePointFromKm(kmNum) : null
-                    const isEstimated = Boolean(fromKm)
-                    const finalLat = hasGps ? lat! : fromKm?.lat ?? null
-                    const finalLng = hasGps ? lng! : fromKm?.lng ?? null
+                    const fromKm = !hasGps && kmNum != null ? latLngFromOfficialKm(kmNum) : null
+                    const isKmOnly = Boolean(fromKm)
+                    const snappedGps =
+                      hasGps ? snapGpsToNH48Polyline(lat!, lng!) : null
+                    const markerPos = snappedGps ?? fromKm
+                    const finalLat = markerPos?.lat ?? null
+                    const finalLng = markerPos?.lng ?? null
 
                     if (finalLat == null || finalLng == null) {
                       return <p className="detail-map-fallback">No map position — add GPS or a KM marker along NH48.</p>
                     }
 
-                    const markerColor = isEstimated ? '#f59e0b' : '#ef4444'
-                    const tooltipText = isEstimated
-                      ? `~KM ${kmNum} (estimated)`
-                      : `GPS${kmNum != null ? ` · KM ${kmNum}` : ''}`
+                    const markerColor = isKmOnly ? '#f59e0b' : '#ef4444'
+                    const routeLine = nh48LeafletLatLngs()
+                    const approxKm =
+                      isKmOnly && kmNum != null
+                        ? kmNum
+                        : snappedGps
+                          ? Math.round(officialKmFromSnappedPoint(snappedGps))
+                          : kmNum
+                    const tooltipText = isKmOnly
+                      ? `KM ${kmNum} (on NH48 polyline)`
+                      : `Snapped to NH48${approxKm != null ? ` · ~KM ${approxKm}` : ''}`
 
                     return (
                       <>
                         <p className="detail-map-source">
-                          {isEstimated
-                            ? `Approximate position on NH48 from KM marker (no GPS). Axis: Bengaluru–Chennai, ${NH48_TOTAL_KM} km.`
-                            : 'Showing reported GPS coordinates on the map.'}
+                          {isKmOnly
+                            ? `Position from KM marker along the NH48 reference polyline (0–${NH48_KM_LENGTH} km).`
+                            : 'GPS snapped to the nearest point on the NH48 reference polyline.'}
                         </p>
                         <MapContainer
                           className="leaflet-map detail-leaflet-map"
@@ -1681,6 +1796,16 @@ function App() {
                           <TileLayer
                             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                          />
+                          <Polyline
+                            positions={routeLine}
+                            pathOptions={{
+                              color: '#2563eb',
+                              weight: 4,
+                              opacity: 0.88,
+                              lineCap: 'round',
+                              lineJoin: 'round',
+                            }}
                           />
                           <CircleMarker
                             center={[finalLat, finalLng]}
@@ -1701,17 +1826,17 @@ function App() {
                               {tooltipText}
                             </Tooltip>
                             <Popup>
-                              {isEstimated ? (
+                              {isKmOnly ? (
                                 <>
-                                  ~KM {kmNum} (estimated)
+                                  KM {kmNum} on NH48 polyline
                                   <br />
-                                  <span className="map-popup-sub">NH48 Bengaluru → Chennai</span>
+                                  <span className="map-popup-sub">Interpolated along road path</span>
                                 </>
                               ) : (
                                 <>
                                   {selected.incident_type}
                                   <br />
-                                  <span className="map-popup-sub">GPS location</span>
+                                  <span className="map-popup-sub">GPS snapped to NH48</span>
                                 </>
                               )}
                             </Popup>

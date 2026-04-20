@@ -9,7 +9,6 @@ import {
   officialKmFromSnappedPoint,
   resolveIncidentMapPosition,
   resolveVehicleMapPosition,
-  snapGpsToNH48Polyline,
 } from './nh48Route'
 import { Nh48OpsLiveMap } from './nh48OpsLiveMap'
 import {
@@ -631,15 +630,36 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
   const [openVehicleKey, setOpenVehicleKey] = useState<string | null>(null)
 
   const incidentsPlaced = useMemo(() => {
-    const out: { key: string; inc: LiveMapIncident; km: number; x: number; y: number }[] = []
+    type Raw = { key: string; inc: LiveMapIncident; km: number; xBase: number }
+    const raw: Raw[] = []
     for (const c of corridors) {
       for (const inc of c.incidents) {
         const km = kmForLiveIncident(inc)
         if (km == null) continue
-        const x = kmToDiagramX(km) + jitterId(inc.id, 8)
-        const y = roadY - 38 + jitterId(`${inc.id}y`, 6)
-        out.push({ key: `${c.id}-${inc.id}`, inc, km, x, y })
+        raw.push({ key: `${c.id}-${inc.id}`, inc, km, xBase: kmToDiagramX(km) })
       }
+    }
+    const groups = new Map<string, Raw[]>()
+    for (const r of raw) {
+      const gk = r.km.toFixed(2)
+      if (!groups.has(gk)) groups.set(gk, [])
+      groups.get(gk)!.push(r)
+    }
+    const STAGGER = 14
+    const out: { key: string; inc: LiveMapIncident; km: number; x: number; y: number }[] = []
+    for (const arr of groups.values()) {
+      arr.forEach((r, idx) => {
+        const n = arr.length
+        const angle = n > 1 ? (idx / n) * 2 * Math.PI : 0
+        const rad = n > 1 ? STAGGER : 0
+        out.push({
+          key: r.key,
+          inc: r.inc,
+          km: r.km,
+          x: r.xBase + rad * Math.cos(angle),
+          y: roadY - 38 + rad * Math.sin(angle),
+        })
+      })
     }
     return out
   }, [corridors, roadY])
@@ -923,19 +943,24 @@ function IncidentMiniMap({
   leafletReady,
   latitude,
   longitude,
+  km_marker,
 }: {
   leafletReady: boolean
   latitude: number | null
   longitude: number | null
+  km_marker?: number | null
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const pos = useMemo(
+    () => resolveIncidentMapPosition({ latitude, longitude, km_marker }),
+    [latitude, longitude, km_marker],
+  )
 
   useEffect(() => {
-    if (!leafletReady || latitude == null || longitude == null) return
+    if (!leafletReady || !pos) return
     const L = (window as unknown as { L?: any }).L
     if (!L || !hostRef.current) return
     const el = hostRef.current
-    const snap = snapGpsToNH48Polyline(latitude, longitude)
     const map = L.map(el)
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap',
@@ -948,7 +973,7 @@ function IncidentMiniMap({
       lineCap: 'round',
       lineJoin: 'round',
     }).addTo(map)
-    L.circleMarker([snap.lat, snap.lng], {
+    L.circleMarker([pos.lat, pos.lng], {
       radius: 11,
       color: '#b91c1c',
       fillColor: '#ef4444',
@@ -956,14 +981,14 @@ function IncidentMiniMap({
       weight: 2,
     }).addTo(map)
     const b = L.latLngBounds(route)
-    b.extend([snap.lat, snap.lng])
+    b.extend([pos.lat, pos.lng])
     map.fitBounds(b, { padding: [28, 28], maxZoom: 11 })
     return () => {
       map.remove()
     }
-  }, [leafletReady, latitude, longitude])
+  }, [leafletReady, pos])
 
-  if (latitude == null || longitude == null) {
+  if (!pos) {
     return <p className="muted incident-map-fallback">No map position (add GPS or KM to the incident).</p>
   }
   if (!leafletReady) {
@@ -2144,6 +2169,7 @@ export default function App() {
                   leafletReady={leafletReady}
                   latitude={selectedIncident.latitude ?? null}
                   longitude={selectedIncident.longitude ?? null}
+                  km_marker={selectedIncident.km_marker ?? null}
                 />
                 <div className="incident-modal-grid">
                   <div>

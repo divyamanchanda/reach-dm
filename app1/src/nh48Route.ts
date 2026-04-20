@@ -1,7 +1,7 @@
 /**
  * NH48 Bengaluru → Chennai reference polyline (road-following path, not a straight chord).
  * KM scale 0–312 is mapped proportionally to cumulative geodesic length along this path.
- * Keep in sync with app1/src/nh48Route.ts and backend/app/geo_utils.py.
+ * Kept in sync with app4/src/nh48Route.ts and backend/app/geo_utils.py.
  */
 
 export const NH48_KM_LENGTH = 312
@@ -43,7 +43,6 @@ export function haversineKm(aLat: number, aLng: number, bLat: number, bLng: numb
   return 2 * R * Math.asin(Math.sqrt(x))
 }
 
-/** Cumulative distance [km] from first waypoint along the polyline (same length as route). */
 export function cumulativeDistancesKm(route: readonly LatLng[]): number[] {
   const acc: number[] = [0]
   for (let i = 1; i < route.length; i++) {
@@ -60,13 +59,11 @@ function nh48Cum(): number[] {
   return _cumCache
 }
 
-/** Total geodesic length of NH48 polyline (km). */
 export function nh48TotalRouteKm(): number {
   const c = nh48Cum()
   return c[c.length - 1]
 }
 
-/** Interpolate position at distance `d` km from start along `route` (uses `cum` from cumulativeDistancesKm). */
 export function positionAtDistanceKm(route: readonly LatLng[], cum: readonly number[], d: number): LatLng {
   if (route.length === 0) throw new Error('empty route')
   if (route.length === 1) return { ...route[0] }
@@ -90,9 +87,6 @@ export function positionAtDistanceKm(route: readonly LatLng[], cum: readonly num
   return { ...route[route.length - 1] }
 }
 
-/**
- * Map official NH km (0–312) to a point on the polyline: proportional to arc length.
- */
 export function latLngFromOfficialKm(km: number): LatLng {
   const k = Math.max(0, Math.min(NH48_KM_LENGTH, km))
   const cum = nh48Cum()
@@ -102,7 +96,6 @@ export function latLngFromOfficialKm(km: number): LatLng {
   return positionAtDistanceKm(NH48_WAYPOINTS, cum, d)
 }
 
-/** Closest point on segment a–b to p (planar lat/lng — adequate for snapping). */
 export function closestPointOnSegment(p: LatLng, a: LatLng, b: LatLng): LatLng {
   const dx = b.lng - a.lng
   const dy = b.lat - a.lat
@@ -119,7 +112,6 @@ function sqPlanarDist(p: LatLng, q: LatLng): number {
   return dlat * dlat + dlng * dlng
 }
 
-/** Snap GPS to nearest point on the NH48 polyline (vertex-to-vertex segments). */
 export function snapGpsToNH48Polyline(lat: number, lng: number): LatLng {
   const p: LatLng = { lat, lng }
   const route = NH48_WAYPOINTS
@@ -136,7 +128,6 @@ export function snapGpsToNH48Polyline(lat: number, lng: number): LatLng {
   return best
 }
 
-/** Geodesic distance along the polyline from start to the projection of `point` onto the nearest segment. */
 export function distanceAlongRouteKm(point: LatLng): number {
   const route = NH48_WAYPOINTS
   const cum = nh48Cum()
@@ -162,7 +153,6 @@ export function distanceAlongRouteKm(point: LatLng): number {
   return bestAlong
 }
 
-/** Official NH km (0–312) corresponding to a snapped GPS position. */
 export function officialKmFromSnappedPoint(snap: LatLng): number {
   const total = nh48TotalRouteKm()
   if (total <= 0) return 0
@@ -197,12 +187,10 @@ export function resolveVehicleMapPosition(v: {
   return resolveIncidentMapPosition(v)
 }
 
-/** Leaflet LatLng tuple for polyline. */
 export function nh48LeafletLatLngs(): [number, number][] {
   return NH48_WAYPOINTS.map((p) => [p.lat, p.lng])
 }
 
-/** Diagram/schematic: KM (0–312) for each waypoint along proportional arc length. */
 export function nh48DiagramCityMarkers(): { km: number; label: string }[] {
   const cum = nh48Cum()
   const total = cum[cum.length - 1]
@@ -214,7 +202,6 @@ export function nh48DiagramCityMarkers(): { km: number; label: string }[] {
 
 const STACK_PX = 10
 
-/** Spread markers that share the same stack key (e.g. same rounded lat/lng) in screen space. */
 export function stackOffsetLayerPixels(stackIndex: number, stackSize: number): { dx: number; dy: number } {
   if (stackSize <= 1) return { dx: 0, dy: 0 }
   const angle = (stackIndex / stackSize) * 2 * Math.PI
