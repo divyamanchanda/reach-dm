@@ -1,6 +1,19 @@
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Default when CORS_ORIGINS is unset or empty (explicit origins only — never "*").
+DEFAULT_CORS_ORIGINS: tuple[str, ...] = (
+    "https://reachme.co.in",
+    "https://sos.reachme.co.in",
+    "https://driver.reachme.co.in",
+    "https://admin.reachme.co.in",
+    "https://reach-dispatch.vercel.app",
+    "https://reach-report-lovat.vercel.app",
+    "https://reach-driver.vercel.app",
+    "https://reach-admin.vercel.app",
+    "http://localhost:5173",
+)
+
 
 def normalize_database_url(url: str) -> str:
     """Railway/Heroku often provide postgres:// which SQLAlchemy expects as postgresql+psycopg2://."""
@@ -30,9 +43,9 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me-in-production-use-32chars-minimum!!"
     jwt_expires_in_days: int = 7
 
-    # CORS. Railway/Vercel often set `CORS_ORIGINS`; we also accept `CORS_ORIGIN` for compatibility.
+    # CORS — explicit origins only (no wildcard). Override with CORS_ORIGINS comma-separated in production.
     cors_origins_raw: str = Field(
-        default="http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176",
+        default=",".join(DEFAULT_CORS_ORIGINS),
         validation_alias=AliasChoices("CORS_ORIGINS", "CORS_ORIGIN"),
     )
 
@@ -84,32 +97,30 @@ class Settings(BaseSettings):
             "or set DB_HOST (and optionally DB_PORT, DB_NAME, DB_USER, DB_PASSWORD) for local Postgres."
         )
 
+    @field_validator("cors_origins_raw", mode="after")
+    @classmethod
+    def reject_cors_wildcard(cls, v: str) -> str:
+        s = (v or "").strip()
+        if s == "*":
+            raise ValueError(
+                "CORS_ORIGINS cannot be '*' — set an explicit comma-separated list of allowed origins."
+            )
+        return v
+
     @property
     def cors_origins(self) -> list[str]:
-        hardcoded_origin = "https://reach-dispatch.vercel.app"
-
         raw = (self.cors_origins_raw or "").strip()
         tokens = [o.strip() for o in raw.split(",") if o.strip()]
-
-        # Wildcard allow-all fallback.
-        if len(tokens) == 1 and tokens[0] == "*":
-            return ["*", hardcoded_origin]
-
-        # Otherwise, use the explicit list of origins (comma-separated) + the hardcoded Vercel dispatch origin.
         origins: list[str] = []
         seen: set[str] = set()
-        for o in [hardcoded_origin, *tokens]:
-            o = o.strip()
-            if not o:
-                continue
+        for o in tokens:
             if o == "*":
-                # Only treat * as allow-all when it is the only value.
                 continue
             if o in seen:
                 continue
             seen.add(o)
             origins.append(o)
-        return origins
+        return list(origins) if origins else list(DEFAULT_CORS_ORIGINS)
 
 
 settings = Settings()

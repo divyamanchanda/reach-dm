@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.geo_utils import incident_lat_lng, nh48_km_from_lat_lng
 from app.models import (
+    ApiRequestLog,
     AuditLog,
     BroadcastMessage,
     Corridor,
@@ -38,6 +39,7 @@ from app.schemas import (
     AdminVehicleDashboardOut,
     AdminUserCreateBody,
     AnalyticsIncidentRowOut,
+    ApiRequestLogOut,
     AuditLogEntryOut,
     BroadcastBody,
     CorridorOut,
@@ -279,6 +281,23 @@ def list_audit_log(
 ):
     rows = db.execute(select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(100)).scalars().all()
     return [AuditLogEntryOut.model_validate(r) for r in rows]
+
+
+@router.get("/request-logs", response_model=list[ApiRequestLogOut])
+def list_request_logs(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("admin")),
+    limit: int = Query(500, ge=1, le=5000),
+):
+    """HTTP access log for the last 24 hours (admin only)."""
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    rows = db.execute(
+        select(ApiRequestLog)
+        .where(ApiRequestLog.timestamp >= since)
+        .order_by(ApiRequestLog.timestamp.desc())
+        .limit(limit)
+    ).scalars().all()
+    return [ApiRequestLogOut.model_validate(r) for r in rows]
 
 
 @router.post("/incidents/archive-stale", response_model=AdminArchiveStaleOut)

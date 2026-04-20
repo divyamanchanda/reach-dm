@@ -8,11 +8,16 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.database import SessionLocal, engine
+from app.middleware.security import RateLimitMiddleware, RequestLoggingMiddleware
 from app.routers import admin, auth, corridor_detect, corridors, health, incidents, public, sms, vehicles
 from app.socket_server import sio
 
 fastapi_app = FastAPI(title="REACH API", version="0.1.0")
 
+# Last added = outermost. CORS outer (all responses get CORS headers). RequestLogging wraps RateLimit
+# so 429 responses are still logged.
+fastapi_app.add_middleware(RateLimitMiddleware, api_prefix=settings.api_prefix)
+fastapi_app.add_middleware(RequestLoggingMiddleware)
 fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -107,6 +112,21 @@ def ensure_coordinate_columns() -> None:
             )
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log (timestamp DESC)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS api_request_log (
+                  id UUID PRIMARY KEY,
+                  timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+                  method TEXT NOT NULL,
+                  endpoint TEXT NOT NULL,
+                  client_ip TEXT NOT NULL,
+                  status_code INTEGER NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_api_request_log_timestamp ON api_request_log (timestamp DESC)"))
         nh48_points = [
             {"lat": 12.9716, "lng": 77.5946},
             {"lat": 12.8458, "lng": 77.6692},
@@ -173,6 +193,23 @@ async def start_background_maintenance() -> None:
             await asyncio.sleep(300)
 
     asyncio.create_task(loop())
+
+
+@fastapi_app.on_event("startup")
+async def start_request_log_prune() -> None:
+    async def prune_loop() -> None:
+        await asyncio.sleep(120)
+        while True:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text("DELETE FROM api_request_log WHERE timestamp < now() - interval '24 hours'")
+                    )
+            except Exception:
+                logging.getLogger("uvicorn.error").exception("request log prune")
+            await asyncio.sleep(3600)
+
+    asyncio.create_task(prune_loop())
 
 
 app = socketio.ASGIApp(sio, other_asgi_app=fastapi_app, socketio_path="socket.io")

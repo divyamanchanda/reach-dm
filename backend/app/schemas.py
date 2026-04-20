@@ -303,6 +303,17 @@ class AuditLogEntryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ApiRequestLogOut(BaseModel):
+    id: uuid.UUID
+    timestamp: datetime
+    method: str
+    endpoint: str
+    client_ip: str
+    status_code: int
+
+    model_config = {"from_attributes": True}
+
+
 class AdminArchiveStaleOut(BaseModel):
     """Bulk archive for admin test-data cleanup."""
 

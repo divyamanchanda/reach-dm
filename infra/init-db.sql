@@ -115,3 +115,14 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log (timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS api_request_log (
+  id UUID PRIMARY KEY,
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+  method TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  client_ip TEXT NOT NULL,
+  status_code INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_request_log_timestamp ON api_request_log (timestamp DESC);
