@@ -9,6 +9,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.geo_utils import incident_lat_lng
+from app.models import Incident
 from app.schemas import NearbyVehicleOut, PublicIncidentCreate, PublicIncidentResponse
 from app.services.audit_log import log_audit
 from app.services.dispatch import NEARBY_VEHICLE_DRIVER_JOIN, NEARBY_VEHICLE_ORDER_BY
@@ -78,17 +80,12 @@ def _fetch_osrm_durations_and_distances(
 
 
 def nearest_available_ambulance_eta(db: Session, incident_id: uuid.UUID) -> float | None:
-    row = db.execute(
-        text(
-            """
-            SELECT lng, lat FROM incidents WHERE id = :id
-            """
-        ),
-        {"id": str(incident_id)},
-    ).one_or_none()
-    if not row or row[0] is None or row[1] is None:
+    inc = db.get(Incident, incident_id)
+    if not inc:
         return None
-    lng, lat = float(row[0]), float(row[1])
+    lat, lng = incident_lat_lng(db, inc)
+    if lat is None or lng is None:
+        return None
     dist_sql = _HAVERSINE_M.format(tbl="v")
     rows = db.execute(
         text(
@@ -221,17 +218,12 @@ def list_nearby_ambulances(
     limit: int = 20,
     exclude_vehicle_ids: set[uuid.UUID] | None = None,
 ) -> list[NearbyVehicleOut]:
-    row = db.execute(
-        text(
-            """
-            SELECT lng, lat FROM incidents WHERE id = :id
-            """
-        ),
-        {"id": str(incident_id)},
-    ).one_or_none()
-    if not row or row[0] is None or row[1] is None:
+    inc = db.get(Incident, incident_id)
+    if not inc:
         return []
-    lng, lat = float(row[0]), float(row[1])
+    lat, lng = incident_lat_lng(db, inc)
+    if lat is None or lng is None:
+        return []
     dist_sql = _HAVERSINE_M.format(tbl="v")
     excl = exclude_vehicle_ids or set()
     excl_sql = ""

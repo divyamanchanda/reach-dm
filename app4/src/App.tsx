@@ -3,6 +3,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { AnalyticsPage, BroadcastPage, SpeedZonesPage } from './adminAnalytics'
 import {
+  NH48_KM_LENGTH,
+  nh48DiagramCityMarkers,
+  nh48LeafletLatLngs,
+  officialKmFromSnappedPoint,
+  resolveIncidentMapPosition,
+  resolveVehicleMapPosition,
+  snapGpsToNH48Polyline,
+} from './nh48Route'
+import { Nh48OpsLiveMap } from './nh48OpsLiveMap'
+import {
   API,
   AUTH_TOKEN_KEY,
   apiUrl,
@@ -284,44 +294,14 @@ function vehicleStatusLabel(status: string): string {
   return s
 }
 
-const NH48_KM_LENGTH = 312
-
 const HW_DIAGRAM = { w: 1000, h: 210, pad: 52, roadY: 118 } as const
+
+const NH48_DIAGRAM_CITIES = nh48DiagramCityMarkers()
 
 function kmToDiagramX(km: number): number {
   const t = Math.max(0, Math.min(1, km / NH48_KM_LENGTH))
   return HW_DIAGRAM.pad + t * (HW_DIAGRAM.w - 2 * HW_DIAGRAM.pad)
 }
-
-function estimatePointFromKm(km: number): LatLng {
-  const bengaluru = { lat: 12.9716, lng: 77.5946 }
-  const chennai = { lat: 13.0827, lng: 80.2707 }
-  const t = Math.min(1, Math.max(0, km / NH48_KM_LENGTH))
-  return {
-    lat: bengaluru.lat + (chennai.lat - bengaluru.lat) * t,
-    lng: bengaluru.lng + (chennai.lng - bengaluru.lng) * t,
-  }
-}
-
-/** Approximate KM along NH48 from coordinates (planar projection onto Bengaluru–Chennai segment). */
-function kmAlongNh48FromLatLng(lat: number, lng: number): number {
-  const b = { lat: 12.9716, lng: 77.5946 }
-  const c = { lat: 13.0827, lng: 80.2707 }
-  const dx = c.lng - b.lng
-  const dy = c.lat - b.lat
-  const len2 = dx * dx + dy * dy
-  if (len2 <= 0) return 0
-  const t = Math.max(0, Math.min(1, ((lng - b.lng) * dx + (lat - b.lat) * dy) / len2))
-  return t * NH48_KM_LENGTH
-}
-
-const NH48_DIAGRAM_CITIES: { km: number; label: string }[] = [
-  { km: 0, label: 'Bengaluru' },
-  { km: 40, label: 'Hosur' },
-  { km: 90, label: 'Krishnagiri' },
-  { km: 190, label: 'Vellore' },
-  { km: NH48_KM_LENGTH, label: 'Chennai' },
-]
 
 function jitterId(id: string, range: number): number {
   let h = 0
@@ -329,42 +309,22 @@ function jitterId(id: string, range: number): number {
   return ((h % (range * 2 + 1)) - range) * 0.6
 }
 
-function incidentLatLng(inc: LiveMapIncident): LatLng | null {
-  if (inc.latitude != null && inc.longitude != null) {
-    return { lat: inc.latitude, lng: inc.longitude }
-  }
-  if (inc.km_marker != null && Number.isFinite(inc.km_marker)) {
-    return estimatePointFromKm(inc.km_marker)
-  }
-  return null
-}
-
-function vehicleLatLng(v: LiveMapVehicle): LatLng | null {
-  if (v.latitude != null && v.longitude != null) {
-    return { lat: v.latitude, lng: v.longitude }
-  }
-  if (v.km_marker != null && Number.isFinite(v.km_marker)) {
-    return estimatePointFromKm(v.km_marker)
-  }
-  return null
-}
-
 function kmForLiveIncident(inc: LiveMapIncident): number | null {
   if (inc.km_marker != null && Number.isFinite(inc.km_marker)) {
     return Math.max(0, Math.min(NH48_KM_LENGTH, inc.km_marker))
   }
-  const ll = incidentLatLng(inc)
+  const ll = resolveIncidentMapPosition(inc)
   if (!ll) return null
-  return kmAlongNh48FromLatLng(ll.lat, ll.lng)
+  return officialKmFromSnappedPoint(ll)
 }
 
 function kmForLiveVehicle(v: LiveMapVehicle): number | null {
   if (v.km_marker != null && Number.isFinite(v.km_marker)) {
     return Math.max(0, Math.min(NH48_KM_LENGTH, v.km_marker))
   }
-  const ll = vehicleLatLng(v)
+  const ll = resolveVehicleMapPosition(v)
   if (!ll) return null
-  return kmAlongNh48FromLatLng(ll.lat, ll.lng)
+  return officialKmFromSnappedPoint(ll)
 }
 
 function isLikelyHighwayHit(row: NominatimRow): boolean {
@@ -975,22 +935,29 @@ function IncidentMiniMap({
     const L = (window as unknown as { L?: any }).L
     if (!L || !hostRef.current) return
     const el = hostRef.current
-    const map = L.map(el).setView([latitude, longitude], 10)
+    const snap = snapGpsToNH48Polyline(latitude, longitude)
+    const map = L.map(el)
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap',
     }).addTo(map)
-    L.circleMarker([latitude, longitude], {
+    const route = nh48LeafletLatLngs()
+    L.polyline(route, {
+      color: '#2563eb',
+      weight: 4,
+      opacity: 0.9,
+      lineCap: 'round',
+      lineJoin: 'round',
+    }).addTo(map)
+    L.circleMarker([snap.lat, snap.lng], {
       radius: 11,
       color: '#b91c1c',
       fillColor: '#ef4444',
       fillOpacity: 0.95,
       weight: 2,
     }).addTo(map)
-    const nh = [estimatePointFromKm(0), estimatePointFromKm(NH48_KM_LENGTH)]
-    L.polyline(
-      nh.map((p) => [p.lat, p.lng]),
-      { color: '#64748b', weight: 3, opacity: 0.55 },
-    ).addTo(map)
+    const b = L.latLngBounds(route)
+    b.extend([snap.lat, snap.lng])
+    map.fitBounds(b, { padding: [28, 28], maxZoom: 11 })
     return () => {
       map.remove()
     }
@@ -1846,12 +1813,17 @@ export default function App() {
               <span className="active-amb">Ambulances active: {activeAmbulances}</span>
             </div>
             <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginTop: 0 }}>
-              SVG highway: positions use <strong>km_marker</strong> when set, otherwise GPS projected onto the Bengaluru–Chennai axis (0–312 km).
+              Schematic uses <strong>km_marker</strong> when set; otherwise GPS is snapped to the NH48 reference polyline and converted to km (0–312).
             </p>
             <p style={{ color: 'var(--muted)', fontSize: '0.82rem' }}>
               Corridors: {liveMap.length}. Data: <code>GET /api/admin/live-map</code>. Refreshes every 15s.
             </p>
             <LiveHighwayDiagram corridors={liveMap} />
+            <h3 style={{ marginTop: '1.75rem' }}>Geographic live map</h3>
+            <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginTop: 0 }}>
+              NH48 follows the road waypoint polyline; markers use km interpolation or GPS snapped to the route.
+            </p>
+            <Nh48OpsLiveMap liveMap={{ corridors: liveMap }} />
           </>
         )}
 

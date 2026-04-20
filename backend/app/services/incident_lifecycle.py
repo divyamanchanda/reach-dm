@@ -32,6 +32,10 @@ def expire_stale_open_incidents(db: Session, *, commit: bool = True) -> int:
     n = r.rowcount or 0
     if commit:
         db.commit()
+    if n > 0:
+        from app.services.vehicle_sync import sync_vehicle_statuses_with_incidents
+
+        sync_vehicle_statuses_with_incidents(db, commit=commit)
     return n
 
 

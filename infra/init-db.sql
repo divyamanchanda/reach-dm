@@ -98,3 +98,20 @@ CREATE TABLE dispatches (
 );
 
 CREATE INDEX idx_dispatches_incident ON dispatches (incident_id);
+
+-- Align with backend startup migrations (app/main.py) for greenfield installs
+ALTER TABLE corridors ADD COLUMN IF NOT EXISTS waypoints JSONB;
+ALTER TABLE corridors ADD COLUMN IF NOT EXISTS auto_dispatch_enabled BOOLEAN NOT NULL DEFAULT true;
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id UUID PRIMARY KEY,
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+  user_id UUID REFERENCES users (id) ON DELETE SET NULL,
+  user_name TEXT,
+  action TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id UUID,
+  details JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log (timestamp DESC);

@@ -151,11 +151,16 @@ async def start_background_maintenance() -> None:
             db = SessionLocal()
             try:
                 _metrics, notes = run_maintenance_cycle(db)
-                for cid, msg in notes:
+                for cid, msg, iid, vid in notes:
                     await emit_to_corridor(
                         "operator_alert",
                         cid,
                         {"message": msg, "kind": "auto_dispatch"},
+                    )
+                    await emit_to_corridor(
+                        "incident:dispatched",
+                        cid,
+                        {"incident_id": str(iid), "vehicle_id": str(vid), "auto": True},
                     )
             except Exception:
                 logging.getLogger("uvicorn.error").exception("background maintenance")

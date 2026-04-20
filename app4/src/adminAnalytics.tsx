@@ -1,8 +1,5 @@
 import type { FormEvent } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import L from 'leaflet'
-import markerIcon from 'leaflet/dist/images/marker-icon.png'
-import markerShadow from 'leaflet/dist/images/marker-shadow.png'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Bar,
   BarChart,
@@ -22,28 +19,9 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import 'leaflet/dist/leaflet.css'
 import { deleteJson, fetchJson, isSessionExpiredError, patchJson, postJson } from './api'
-
-const DefaultIcon = L.icon({
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-})
-L.Marker.prototype.options.icon = DefaultIcon
-
-const NH48_KM_LENGTH = 312
-/** NH48 route: KM anchors along Bengaluru → Chennai polyline (analytics map). */
-const NH48_ROUTE: { km: number; lat: number; lng: number }[] = [
-  { km: 0, lat: 12.9716, lng: 77.5946 },
-  { km: 52, lat: 12.7409, lng: 77.8253 },
-  { km: 100, lat: 12.5266, lng: 78.2137 },
-  { km: 218, lat: 12.9165, lng: 79.1325 },
-  { km: 312, lat: 13.0827, lng: 80.2707 },
-]
-
-const NH48_WAYPOINTS: L.LatLngExpression[] = NH48_ROUTE.map((p) => [p.lat, p.lng])
+import { NH48_KM_LENGTH, nh48DiagramCityMarkers } from './nh48Route'
+import { Nh48OpsLiveMap } from './nh48OpsLiveMap'
 
 /** Icons as codepoints — keeps source file encoding-safe. */
 const Ic = {
@@ -61,13 +39,7 @@ const Ic = {
   infoLbl: String.fromCodePoint(0x1f7e1),
 } as const
 
-const TOWN_ANCHORS_KM: { km: number; name: string }[] = [
-  { km: 0, name: 'Bengaluru' },
-  { km: 52, name: 'Hosur' },
-  { km: 100, name: 'Krishnagiri' },
-  { km: 218, name: 'Vellore' },
-  { km: 312, name: 'Chennai' },
-]
+const TOWN_ANCHORS_KM = nh48DiagramCityMarkers()
 
 function nearestTownForSegmentMid(midKm: number): string {
   let best = TOWN_ANCHORS_KM[0]
@@ -79,69 +51,7 @@ function nearestTownForSegmentMid(midKm: number): string {
       best = t
     }
   }
-  return best.name
-}
-
-function latLngFromKm(km: number): L.LatLngTuple {
-  const k = Math.max(0, Math.min(NH48_KM_LENGTH, km))
-  const r = NH48_ROUTE
-  if (k <= r[0].km) return [r[0].lat, r[0].lng]
-  for (let i = 0; i < r.length - 1; i++) {
-    const a = r[i]
-    const b = r[i + 1]
-    if (k <= b.km) {
-      const span = b.km - a.km
-      const t = span > 0 ? (k - a.km) / span : 0
-      const u = Math.max(0, Math.min(1, t))
-      return [a.lat + (b.lat - a.lat) * u, a.lng + (b.lng - a.lng) * u]
-    }
-  }
-  const last = r[r.length - 1]
-  return [last.lat, last.lng]
-}
-
-function hasValidGps(lat: number | null | undefined, lng: number | null | undefined): boolean {
-  return lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)
-}
-
-function closestPointOnSegment(
-  lat: number,
-  lng: number,
-  lat1: number,
-  lng1: number,
-  lat2: number,
-  lng2: number,
-): L.LatLngTuple {
-  const dlat = lat2 - lat1
-  const dlng = lng2 - lng1
-  const len2 = dlat * dlat + dlng * dlng
-  if (len2 < 1e-18) return [lat1, lng1]
-  let t = ((lat - lat1) * dlat + (lng - lng1) * dlng) / len2
-  t = Math.max(0, Math.min(1, t))
-  return [lat1 + t * dlat, lng1 + t * dlng]
-}
-
-function squaredPlanarDist(latA: number, lngA: number, latB: number, lngB: number): number {
-  const dlat = latA - latB
-  const dlng = lngA - lngB
-  return dlat * dlat + dlng * dlng
-}
-
-/** Snap a GPS point to the nearest point on the NH48 polyline (segment-wise). */
-function snapGpsToNH48(lat: number, lng: number): L.LatLngTuple {
-  let best: L.LatLngTuple = [lat, lng]
-  let bestD = Infinity
-  for (let i = 0; i < NH48_ROUTE.length - 1; i++) {
-    const a = NH48_ROUTE[i]
-    const b = NH48_ROUTE[i + 1]
-    const c = closestPointOnSegment(lat, lng, a.lat, a.lng, b.lat, b.lng)
-    const d = squaredPlanarDist(lat, lng, c[0], c[1])
-    if (d < bestD) {
-      bestD = d
-      best = c
-    }
-  }
-  return best
+  return best.label
 }
 
 export type AnalyticsPeriod = 'today' | '7d' | '30d'
@@ -210,30 +120,6 @@ type LiveMapOut = {
     incidents: LiveMapIncident[]
     vehicles: LiveMapVehicle[]
   }[]
-}
-
-const INCIDENT_SEVERITY_COLOR: Record<string, string> = {
-  critical: '#FF2D2D',
-  major: '#FF6B00',
-  minor: '#FFD600',
-}
-
-function vehicleStatusColor(status: string): string {
-  const s = status.toLowerCase()
-  if (s === 'available' || s === 'idle') return '#0EA5E9'
-  if (s === 'dispatched' || s === 'en_route' || s === 'transporting') return '#8B5CF6'
-  if (s === 'on_scene') return '#06B6D4'
-  return '#64748b'
-}
-
-function incidentMarkerHtml(severity: string): string {
-  const c = INCIDENT_SEVERITY_COLOR[severity.toLowerCase()] ?? '#f97316'
-  const pulse = severity.toLowerCase() === 'critical' ? ' ops-inc--pulse' : ''
-  return `<span class="ops-map-dot${pulse}" style="background:${c}"></span>`
-}
-
-function vehicleMarkerHtml(color: string): string {
-  return `<span class="ops-map-veh" style="background:${color}"></span>`
 }
 
 function mean(nums: number[]): number | null {
@@ -349,136 +235,6 @@ function stretchBarColor(count: number): string {
   if (count === 2) return '#fb923c'
   if (count === 1) return '#facc15'
   return '#475569'
-}
-
-function OpsLiveMap({
-  liveMap,
-  highlightVehicleId,
-}: {
-  liveMap: LiveMapOut | null
-  highlightVehicleId: string | null
-}) {
-  const rootRef = useRef<HTMLDivElement>(null)
-  const mapRef = useRef<L.Map | null>(null)
-  const vehMarkersRef = useRef<Map<string, L.Marker>>(new Map())
-  const layerRef = useRef<L.LayerGroup | null>(null)
-
-  useEffect(() => {
-    const el = rootRef.current
-    if (!el || mapRef.current) return
-    const map = L.map(el, { scrollWheelZoom: true }).setView([12.9, 78.2], 8)
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap',
-      maxZoom: 19,
-    }).addTo(map)
-    const poly = L.polyline(NH48_WAYPOINTS, {
-      color: '#2563eb',
-      weight: 4,
-      opacity: 0.95,
-      lineCap: 'round',
-      lineJoin: 'round',
-    }).addTo(map)
-    map.fitBounds(poly.getBounds(), { padding: [40, 40] })
-    layerRef.current = L.layerGroup().addTo(map)
-    mapRef.current = map
-    return () => {
-      map.remove()
-      mapRef.current = null
-      layerRef.current = null
-      vehMarkersRef.current.clear()
-    }
-  }, [])
-
-  useEffect(() => {
-    const map = mapRef.current
-    const layer = layerRef.current
-    if (!map || !layer || !liveMap) return
-    layer.clearLayers()
-    vehMarkersRef.current.clear()
-
-    for (const c of liveMap.corridors) {
-      for (const inc of c.incidents) {
-        let lat: number
-        let lng: number
-        if (hasValidGps(inc.latitude, inc.longitude)) {
-          ;[lat, lng] = snapGpsToNH48(inc.latitude as number, inc.longitude as number)
-        } else if (inc.km_marker != null) {
-          ;[lat, lng] = latLngFromKm(inc.km_marker)
-        } else {
-          continue
-        }
-        const icon = L.divIcon({
-          className: 'ops-leaflet-divicon',
-          html: incidentMarkerHtml(inc.severity),
-          iconSize: [20, 20],
-          iconAnchor: [10, 10],
-        })
-        const m = L.marker([lat, lng], { icon })
-        m.bindPopup(
-          `<div class="ops-popup"><strong>${inc.incident_type.replace(/_/g, ' ')}</strong><br/>` +
-            `${inc.severity} · ${inc.status}<br/>` +
-            `KM: ${inc.km_marker != null ? inc.km_marker : '—'}<br/>` +
-            `${new Date(inc.created_at).toLocaleString()}</div>`,
-        )
-        m.addTo(layer)
-      }
-
-      for (const v of c.vehicles) {
-        let lat: number
-        let lng: number
-        if (hasValidGps(v.latitude, v.longitude)) {
-          lat = v.latitude as number
-          lng = v.longitude as number
-        } else if (v.km_marker != null) {
-          ;[lat, lng] = latLngFromKm(v.km_marker)
-        } else {
-          continue
-        }
-        const col = vehicleStatusColor(v.status)
-        const icon = L.divIcon({
-          className: 'ops-leaflet-divicon',
-          html: vehicleMarkerHtml(col),
-          iconSize: [18, 18],
-          iconAnchor: [9, 9],
-        })
-        const m = L.marker([lat, lng], { icon })
-        m.bindPopup(
-          `<div class="ops-popup"><strong>${v.label}</strong><br/>` +
-            `${v.status}${v.driver_name ? `<br/>Driver: ${v.driver_name}` : ''}` +
-            `${v.assigned_incident_type ? `<br/>Assignment: ${v.assigned_incident_type}` : ''}</div>`,
-        )
-        m.addTo(layer)
-        vehMarkersRef.current.set(v.id, m)
-      }
-    }
-
-    if (highlightVehicleId) {
-      const mk = vehMarkersRef.current.get(highlightVehicleId)
-      if (mk) {
-        const ll = mk.getLatLng()
-        map.setView(ll, Math.max(map.getZoom(), 11), { animate: true })
-        mk.openPopup()
-      }
-    }
-  }, [liveMap, highlightVehicleId])
-
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map) return
-    setTimeout(() => map.invalidateSize(), 200)
-  }, [liveMap])
-
-  return (
-    <div className="ops-map-wrap">
-      <div className="ops-map-shell">
-        <div ref={rootRef} className="ops-map-canvas" />
-        <div className="ops-map-live-badge" aria-hidden>
-          <span className="ops-map-live-dot" /> LIVE
-        </div>
-      </div>
-      <p className="ops-map-footnote">Incidents snapped to nearest highway point</p>
-    </div>
-  )
 }
 
 function GaugeAvgResponse({ minutes, compact }: { minutes: number | null; compact?: boolean }) {
@@ -913,7 +669,7 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
               <h3>Live corridor map</h3>
               <p className="muted small">NH48 overview · incidents (warm) · ambulances (cool)</p>
             </div>
-            <OpsLiveMap liveMap={liveMap} highlightVehicleId={highlightVehicleId} />
+            <Nh48OpsLiveMap liveMap={liveMap} highlightVehicleId={highlightVehicleId} />
           </section>
 
           <div className="ops-chart-grid">

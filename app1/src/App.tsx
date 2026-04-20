@@ -726,6 +726,7 @@ function App() {
   const [password, setPassword] = useState('reach2026')
   const [error, setError] = useState<string | null>(null)
   const [errorHint, setErrorHint] = useState<string | null>(null)
+  const [operatorAlert, setOperatorAlert] = useState<string | null>(null)
 
   const [corridors, setCorridors] = useState<Corridor[]>([])
   const [corridorId, setCorridorId] = useState<string | null>(null)
@@ -918,15 +919,30 @@ function App() {
       }
       bump()
     }
+    const onOperatorAlert = (payload: { message?: string }) => {
+      const m = payload?.message?.trim()
+      if (m) {
+        setOperatorAlert(m)
+        window.setTimeout(() => {
+          setOperatorAlert((prev) => (prev === m ? null : prev))
+        }, 14_000)
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          new Notification('REACH dispatch', { body: m })
+        }
+      }
+      bump()
+    }
     s.on('incident:new', onNewIncident)
     s.on('incident:updated', bump)
     s.on('incident:dispatched', onDispatched)
+    s.on('operator_alert', onOperatorAlert)
     s.on('incident:recalled', bump)
     s.on('corridor:stats', bump)
     setSocket(s)
     return () => {
       s.off('incident:new', onNewIncident)
       s.off('incident:dispatched', onDispatched)
+      s.off('operator_alert', onOperatorAlert)
       s.emit('unsubscribe_corridor', { corridor_id: corridorId })
       s.disconnect()
       setSocket(null)
@@ -1259,6 +1275,15 @@ function App() {
           </button>
         </div>
       </header>
+
+      {operatorAlert ? (
+        <div className="operator-alert-banner" role="status">
+          <span>{operatorAlert}</span>
+          <button type="button" className="operator-alert-dismiss" onClick={() => setOperatorAlert(null)}>
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       {criticalBanner ? (
         <div className="critical-flash-banner" role="alert">

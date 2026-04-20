@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -9,8 +11,9 @@ from app.services.incident_lifecycle import expire_stale_open_incidents
 def sync_vehicle_statuses_with_incidents(db: Session, *, commit: bool = True) -> int:
     """Reset vehicles that are not tied to an active in-flight incident assignment.
 
-    A vehicle should appear dispatched/en_route/on_scene/transporting only when it is the
-    target of the latest dispatch row for an incident in an active response state.
+    A vehicle is "on a job" only when it is the latest dispatched unit for an incident whose
+    status is one of dispatched / en_route / on_scene / transporting (not closed, expired,
+    open queue, etc.).
     """
     r = db.execute(
         text(
@@ -44,7 +47,9 @@ def sync_vehicle_statuses_with_incidents(db: Session, *, commit: bool = True) ->
     return int(n)
 
 
-def run_maintenance_cycle(db: Session) -> tuple[dict[str, int], list[tuple]]:
+def run_maintenance_cycle(
+    db: Session,
+) -> tuple[dict[str, int], list[tuple[uuid.UUID, str, uuid.UUID, uuid.UUID]]]:
     """Expire stale queue items, sync vehicle rows, then auto-dispatch."""
     expired = expire_stale_open_incidents(db, commit=True)
     released = sync_vehicle_statuses_with_incidents(db, commit=True)

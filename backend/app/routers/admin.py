@@ -53,6 +53,7 @@ from app.schemas import (
 )
 from app.security import hash_password, require_role
 from app.services.audit_log import log_audit
+from app.services.vehicle_sync import sync_vehicle_statuses_with_incidents
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -305,6 +306,7 @@ def admin_archive_stale_incidents(
         {"cutoff": cutoff},
     )
     db.commit()
+    sync_vehicle_statuses_with_incidents(db, commit=True)
     return AdminArchiveStaleOut(updated=int(r.rowcount or 0))
 
 

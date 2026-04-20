@@ -19,8 +19,13 @@ def _format_incident_type(raw: str) -> str:
     return raw.replace("_", " ").strip() or "incident"
 
 
-def process_auto_dispatch_candidates(db: Session) -> list[tuple[uuid.UUID, str]]:
-    """Dispatch the nearest available ambulance for stale open incidents. Returns notifications for operators."""
+def process_auto_dispatch_candidates(
+    db: Session,
+) -> list[tuple[uuid.UUID, str, uuid.UUID, uuid.UUID]]:
+    """Dispatch the nearest available ambulance for stale open incidents.
+
+    Returns (corridor_id, console_message, incident_id, vehicle_id) for Socket.IO alerts.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=AUTO_DISPATCH_OPEN_MINUTES)
     rows = db.execute(
         text(
@@ -31,8 +36,6 @@ def process_auto_dispatch_candidates(db: Session) -> list[tuple[uuid.UUID, str]]
             WHERE i.status = 'open'
               AND c.auto_dispatch_enabled IS TRUE
               AND i.created_at < :cutoff
-              AND i.lat IS NOT NULL
-              AND i.lng IS NOT NULL
               AND NOT EXISTS (SELECT 1 FROM dispatches d WHERE d.incident_id = i.id)
             ORDER BY i.created_at ASC
             """
@@ -40,7 +43,7 @@ def process_auto_dispatch_candidates(db: Session) -> list[tuple[uuid.UUID, str]]
         {"cutoff": cutoff},
     ).mappings().all()
 
-    notifications: list[tuple[uuid.UUID, str]] = []
+    notifications: list[tuple[uuid.UUID, str, uuid.UUID, uuid.UUID]] = []
     for row in rows:
         incident_id = row["incident_id"]
         corridor_id = row["corridor_id"]
@@ -70,5 +73,5 @@ def process_auto_dispatch_candidates(db: Session) -> list[tuple[uuid.UUID, str]]
                 "message": msg,
             },
         )
-        notifications.append((corridor_id, msg))
+        notifications.append((corridor_id, msg, incident_id, pick))
     return notifications

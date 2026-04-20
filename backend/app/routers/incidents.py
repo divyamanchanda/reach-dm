@@ -195,6 +195,13 @@ def patch_reassign_incident(
         if "not found" in msg.lower():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=msg) from e
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=msg) from e
+    log_audit(
+        user=user,
+        action="incident_dispatched",
+        entity_type="incident",
+        entity_id=incident_id,
+        details={"vehicle_id": str(dispatch.vehicle_id), "dispatch_id": str(dispatch.id), "reassign": True},
+    )
     inc = db.get(Incident, incident_id)
     cid = inc.corridor_id if inc else None
     if cid:
