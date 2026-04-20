@@ -1740,6 +1740,7 @@ tr:last-child td {
   align-items: center;
   gap: 0.4rem;
   margin-bottom: 0.35rem;
+  min-width: 0;
 }
 
 .ops-kpi-ico {
@@ -1753,6 +1754,10 @@ tr:last-child td {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: #94a3b8;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ops-warn-ico {
@@ -1775,9 +1780,13 @@ tr:last-child td {
 
 .ops-kpi-sub {
   margin-top: 0.35rem;
-  font-size: 0.78rem;
+  font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ops-kpi-sub--good {
@@ -2070,6 +2079,31 @@ tr:last-child td {
   border-radius: 50%;
   border: 2px solid #0f172a;
   box-sizing: border-box;
+}
+
+.ops-map-cluster-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #1e293b;
+  border: 2px solid #38bdf8;
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+  line-height: 1;
+}
+
+.ops-historical-note {
+  margin: 0 0 0.5rem;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
 }
 
 .ops-popup {

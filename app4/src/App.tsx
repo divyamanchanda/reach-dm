@@ -4,6 +4,7 @@ import './App.css'
 import { AnalyticsPage, BroadcastPage, SpeedZonesPage } from './adminAnalytics'
 import {
   NH48_KM_LENGTH,
+  NH48_WAYPOINTS,
   nh48DiagramCityMarkers,
   nh48LeafletLatLngs,
   officialKmFromSnappedPoint,
@@ -296,6 +297,41 @@ function vehicleStatusLabel(status: string): string {
 const HW_DIAGRAM = { w: 1000, h: 210, pad: 52, roadY: 118 } as const
 
 const NH48_DIAGRAM_CITIES = nh48DiagramCityMarkers()
+
+/** Schematic weather line (illustrative; no live API in admin). */
+const NH48_SCHEMATIC_WEATHER: Partial<Record<string, string>> = {
+  Bengaluru: '☀️',
+  'Electronic City': '⛅',
+  Hosur: '⛅',
+  Krishnagiri: '☁️',
+  Ambur: '🌤️',
+  Vellore: '⛅',
+  Ranipet: '🌤️',
+  Sriperumbudur: '⛅',
+  Chennai: '🌤️',
+}
+
+function nominatimQueryVariants(raw: string): string[] {
+  const q = raw.trim()
+  if (!q) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  const add = (s: string) => {
+    if (!seen.has(s)) {
+      seen.add(s)
+      out.push(s)
+    }
+  }
+  add(`${q} India national highway`)
+  add(q)
+  const m = q.match(/NH\s*(\d+)/i)
+  const num = m?.[1]
+  if (num) {
+    add(`National Highway ${num} India`)
+    add(`NH ${num} India`)
+  }
+  return out
+}
 
 function kmToDiagramX(km: number): number {
   const t = Math.max(0, Math.min(1, km / NH48_KM_LENGTH))
@@ -813,11 +849,23 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
         })}
         {NH48_DIAGRAM_CITIES.map(({ km, label }) => {
           const x = kmToDiagramX(km)
+          const wx = NH48_SCHEMATIC_WEATHER[label]
           return (
             <g key={label} style={{ pointerEvents: 'none' }}>
+              {wx ? (
+                <text
+                  x={x}
+                  y={roadY - 62}
+                  textAnchor="middle"
+                  fontSize={14}
+                  style={{ textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
+                >
+                  {wx}
+                </text>
+              ) : null}
               <text
                 x={x}
-                y={roadY - 52}
+                y={wx ? roadY - 46 : roadY - 52}
                 textAnchor="middle"
                 fill="#e2e8f0"
                 fontSize={13}
@@ -826,7 +874,7 @@ function LiveHighwayDiagram({ corridors }: { corridors: LiveMapCorridor[] }) {
               >
                 {label}
               </text>
-              <circle cx={x} cy={roadY - 38} r={3} fill="#38bdf8" opacity={0.9} />
+              <circle cx={x} cy={roadY - 34} r={3} fill="#38bdf8" opacity={0.9} />
             </g>
           )
         })}
@@ -1074,6 +1122,7 @@ export default function App() {
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchResults, setSearchResults] = useState<NominatimRow[]>([])
   const [selectedSearchIndex, setSelectedSearchIndex] = useState<number | null>(null)
+  const [highwaySearchManualFallback, setHighwaySearchManualFallback] = useState(false)
   const [routePath, setRoutePath] = useState<LatLng[] | null>(null)
   const [routeSectionPicks, setRouteSectionPicks] = useState<{ start: LatLng | null; end: LatLng | null }>({
     start: null,
@@ -1406,9 +1455,34 @@ export default function App() {
   }
 
   const applyRouteFromNominatimHit = useCallback((hit: NominatimRow) => {
+    setHighwaySearchManualFallback(false)
     setRoutePath(routeFromNominatimHit(hit))
     setRouteSectionPicks({ start: null, end: null })
     setCorridorDraft(null)
+  }, [])
+
+  const applyPresetNh44 = useCallback(() => {
+    setPageErr(null)
+    setHighwaySearchManualFallback(false)
+    setSearchQuery('NH44')
+    const start: LatLng = { lat: 34.0837, lng: 74.7973 }
+    const end: LatLng = { lat: 8.0883, lng: 77.5385 }
+    setRoutePath([start, end])
+    setRouteSectionPicks({ start: null, end: null })
+    setCorridorDraft(null)
+    setSearchResults([])
+    setSelectedSearchIndex(null)
+  }, [])
+
+  const applyPresetNh48 = useCallback(() => {
+    setPageErr(null)
+    setHighwaySearchManualFallback(false)
+    setSearchQuery('NH48')
+    setRoutePath([...NH48_WAYPOINTS])
+    setRouteSectionPicks({ start: null, end: null })
+    setCorridorDraft(null)
+    setSearchResults([])
+    setSelectedSearchIndex(null)
   }, [])
 
   useEffect(() => {
@@ -1452,14 +1526,35 @@ export default function App() {
   const searchHighway = async () => {
     setSearchLoading(true)
     setPageErr(null)
+    setHighwaySearchManualFallback(false)
     try {
-      const q = encodeURIComponent(`${searchQuery} India national highway`)
-      const rows = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=15&countrycodes=in&polygon_geojson=1&q=${q}`,
-        { headers: { Accept: 'application/json' } },
-      ).then((r) => r.json() as Promise<NominatimRow[]>)
-      const filtered = rows.filter(isLikelyHighwayHit)
-      if (!filtered.length) throw new Error('No National Highway match found in Nominatim')
+      const variants = nominatimQueryVariants(searchQuery)
+      if (!variants.length) {
+        setPageErr('Enter a highway name or code.')
+        return
+      }
+      let filtered: NominatimRow[] = []
+      for (const qv of variants) {
+        const enc = encodeURIComponent(qv)
+        const rows = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=15&countrycodes=in&polygon_geojson=1&q=${enc}`,
+          { headers: { Accept: 'application/json' } },
+        ).then((r) => r.json() as Promise<NominatimRow[]>)
+        const f = rows.filter(isLikelyHighwayHit)
+        if (f.length) {
+          filtered = f
+          break
+        }
+      }
+      if (!filtered.length) {
+        setHighwaySearchManualFallback(true)
+        setSearchResults([])
+        setSelectedSearchIndex(null)
+        setRoutePath(null)
+        setRouteSectionPicks({ start: null, end: null })
+        setCorridorDraft(null)
+        return
+      }
       setSearchResults(filtered)
       setSelectedSearchIndex(0)
       applyRouteFromNominatimHit(filtered[0])
@@ -1479,6 +1574,7 @@ export default function App() {
 
   const applyManualCorridor = () => {
     setPageErr(null)
+    setHighwaySearchManualFallback(false)
     const slat = Number(manualStartLat)
     const slng = Number(manualStartLng)
     const elat = Number(manualEndLat)
@@ -1513,6 +1609,7 @@ export default function App() {
     setCorridorDraft(null)
     setSearchResults([])
     setSelectedSearchIndex(null)
+    setHighwaySearchManualFallback(false)
   }
 
   const addCorridor = async (e: FormEvent) => {
@@ -1977,6 +2074,7 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setCorridorCreateMode('search')
+                    setHighwaySearchManualFallback(false)
                     setManualStartLat('')
                     setManualStartLng('')
                     setManualEndLat('')
@@ -1990,6 +2088,7 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setCorridorCreateMode('manual')
+                    setHighwaySearchManualFallback(false)
                     setRoutePath(null)
                     setRouteSectionPicks({ start: null, end: null })
                     setCorridorDraft(null)
@@ -2015,6 +2114,50 @@ export default function App() {
                       {searchLoading ? 'Searching...' : 'Search OSM'}
                     </button>
                   </div>
+                  <div className="inline-row" style={{ flexWrap: 'wrap', gap: '0.45rem', marginTop: '0.35rem' }}>
+                    <button type="button" onClick={() => applyPresetNh44()}>
+                      NH44 (Srinagar–Kanyakumari)
+                    </button>
+                    <button type="button" onClick={() => applyPresetNh48()}>
+                      NH48 (Delhi–Chennai)
+                    </button>
+                  </div>
+                  {highwaySearchManualFallback ? (
+                    <div className="form-row" style={{ marginTop: '0.75rem' }}>
+                      <p className="hint" style={{ color: 'var(--warn, #b45309)', fontWeight: 600, margin: '0 0 0.5rem' }}>
+                        Highway not found automatically — enter coordinates manually below
+                      </p>
+                      <div className="form-row grid-manual-coords">
+                        <label>
+                          Start latitude
+                          <input value={manualStartLat} onChange={(e) => setManualStartLat(e.target.value)} placeholder="e.g. 12.9716" />
+                        </label>
+                        <label>
+                          Start longitude
+                          <input value={manualStartLng} onChange={(e) => setManualStartLng(e.target.value)} placeholder="e.g. 77.5946" />
+                        </label>
+                        <label>
+                          End latitude
+                          <input value={manualEndLat} onChange={(e) => setManualEndLat(e.target.value)} />
+                        </label>
+                        <label>
+                          End longitude
+                          <input value={manualEndLng} onChange={(e) => setManualEndLng(e.target.value)} />
+                        </label>
+                      </div>
+                      <button type="button" onClick={() => applyManualCorridor()}>
+                        Apply manual coordinates
+                      </button>
+                      <label style={{ marginTop: '0.65rem' }}>Map preview</label>
+                      <CorridorRouteMap
+                        leafletReady={leafletReady}
+                        routePath={routePath}
+                        segmentStart={routeSectionPicks.start}
+                        segmentEnd={routeSectionPicks.end}
+                        onPickAlongRoute={() => {}}
+                      />
+                    </div>
+                  ) : null}
                   {searchResults.length > 0 && (
                     <div className="search-results">
                       {searchResults.map((row, idx) => (

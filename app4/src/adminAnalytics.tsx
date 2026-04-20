@@ -74,6 +74,8 @@ export type AdminAnalytics = {
   comparison_label: string
   incidents: AnalyticsIncidentRow[]
   incidents_previous: AnalyticsIncidentRow[]
+  /** Present on current API; omitted if connecting to an older backend. */
+  incidents_historical?: AnalyticsIncidentRow[]
   fleet: { available: number; dispatched: number; offline: number }
   coverage: { active_corridors: number; km_monitored: number }
   vehicle_performance: {
@@ -191,13 +193,15 @@ const TYPE_LABEL: Record<string, string> = {
 
 /** Distinct fills for Incidents by Type donut (exact hex per product spec). */
 const TYPE_FILL: Record<string, string> = {
+  medical_emergency: '#3B82F6',
   accident: '#FF2D2D',
-  medical_emergency: '#FF6B00',
-  breakdown: '#3B82F6',
   fire: '#F59E0B',
-  obstacle_on_road: '#8B5CF6',
+  breakdown: '#8B5CF6',
+  obstacle_on_road: '#06B6D4',
   other: '#6B7280',
 }
+
+const TREND_VS_PRIOR = 'prior period'
 
 function bucketIncidentType(raw: string): string {
   const k = raw.toLowerCase()
@@ -313,6 +317,7 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
 
   const incidents = data?.incidents ?? []
   const prevIncidents = data?.incidents_previous ?? []
+  const incidentsHistorical = data?.incidents_historical ?? []
   const hasPrev = prevIncidents.length > 0
 
   const metrics = useMemo(() => {
@@ -381,10 +386,12 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
 
   const peakLabel = useMemo(() => formatPeakLabel(hourData.map((d) => d.count)), [hourData])
 
+  const historicalResponse = useMemo(() => responseTimeKpiForPeriod(incidentsHistorical), [incidentsHistorical])
+
   const responseTrendData = useMemo(() => {
-    const { mode } = responseTimeKpiForPeriod(incidents)
+    const { mode } = historicalResponse
     if (mode === 'none') return []
-    const withResp = incidents
+    const withResp = incidentsHistorical
       .filter((i) =>
         mode === 'scene' ? i.time_to_scene_minutes != null : i.first_response_minutes != null,
       )
@@ -397,11 +404,11 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
         label: `#${idx + 1}`,
       }))
     return withResp
-  }, [incidents])
+  }, [incidentsHistorical, historicalResponse])
 
   const stretchData = useMemo(() => {
     const counts = new Map<number, number>()
-    for (const i of incidents) {
+    for (const i of incidentsHistorical) {
       if (i.km_marker == null) continue
       const seg = Math.floor(i.km_marker / 20) * 20
       counts.set(seg, (counts.get(seg) ?? 0) + 1)
@@ -420,7 +427,7 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
       })
     }
     return [...rows].sort((a, b) => b.count - a.count || a.seg - b.seg)
-  }, [incidents])
+  }, [incidentsHistorical])
 
   const vehicleRowsSorted = useMemo(() => {
     const rows = [...(data?.vehicle_performance ?? [])]
@@ -453,9 +460,9 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
   const totalTrendText = () => {
     if (!hasPrev) return '—'
     const d = metrics.deltaTotal
-    if (d === 0) return `No change vs ${data?.comparison_label ?? 'prior period'}`
-    if (d > 0) return `${Ic.up} ${d} vs ${data?.comparison_label ?? 'prior period'}`
-    return `${Ic.down} ${Math.abs(d)} vs ${data?.comparison_label ?? 'prior period'}`
+    if (d === 0) return `No change vs ${TREND_VS_PRIOR}`
+    if (d > 0) return `${Ic.up} ${d} vs ${TREND_VS_PRIOR}`
+    return `${Ic.down} ${Math.abs(d)} vs ${TREND_VS_PRIOR}`
   }
 
   const totalTrendClass = () => {
@@ -479,7 +486,7 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
     <div className="ops-dashboard analytics-page--dark" id="ops-dashboard-print">
       <header className="ops-topbar">
         <div className="ops-topbar-left">
-          <h2 className="ops-title">REACH Operations — Live</h2>
+          <h2 className="ops-title">REACH Operations · Live</h2>
           <p className="ops-live-line">
             <span className="ops-pulse-dot" aria-hidden />
             Live — updates every 15s
@@ -532,7 +539,7 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
                   {metrics.responseMode === 'scene'
                     ? 'Avg time to scene'
                     : metrics.responseMode === 'dispatch'
-                      ? 'Avg time to dispatch'
+                      ? 'Avg Dispatch Time'
                       : 'Avg response'}
                 </span>
               </div>
@@ -545,10 +552,10 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
                       {!hasPrev || metrics.avgResp == null || metrics.avgPrevResp == null
                         ? '—'
                         : metrics.avgResp < metrics.avgPrevResp
-                          ? `${Ic.down} vs ${data.comparison_label}`
+                          ? `${Ic.down} vs ${TREND_VS_PRIOR}`
                           : metrics.avgResp > metrics.avgPrevResp
-                            ? `${Ic.up} vs ${data.comparison_label}`
-                            : `Flat vs ${data.comparison_label}`}
+                            ? `${Ic.up} vs ${TREND_VS_PRIOR}`
+                            : `Flat vs ${TREND_VS_PRIOR}`}
                     </div>
                   </div>
                 </div>
@@ -587,10 +594,10 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
                     {!hasPrev || metrics.resPct == null || metrics.resPrevPct == null
                       ? '—'
                       : metrics.resPct > metrics.resPrevPct
-                        ? `${Ic.up} vs ${data.comparison_label}`
+                        ? `${Ic.up} vs ${TREND_VS_PRIOR}`
                         : metrics.resPct < metrics.resPrevPct
-                          ? `${Ic.down} vs ${data.comparison_label}`
-                          : `Flat vs ${data.comparison_label}`}
+                          ? `${Ic.down} vs ${TREND_VS_PRIOR}`
+                          : `Flat vs ${TREND_VS_PRIOR}`}
                   </div>
                 </div>
               </div>
@@ -610,10 +617,10 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
                   {!hasPrev || metrics.hoaxPct == null || metrics.hoaxPrevPct == null
                     ? '—'
                     : metrics.hoaxPct < metrics.hoaxPrevPct
-                      ? `${Ic.down} vs ${data.comparison_label} (good)`
+                      ? `${Ic.down} vs ${TREND_VS_PRIOR} (good)`
                       : metrics.hoaxPct > metrics.hoaxPrevPct
-                        ? `${Ic.up} vs ${data.comparison_label}`
-                        : `Flat vs ${data.comparison_label}`}
+                        ? `${Ic.up} vs ${TREND_VS_PRIOR}`
+                        : `Flat vs ${TREND_VS_PRIOR}`}
                 </div>
               </div>
             </article>
@@ -779,16 +786,17 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
           <div className="ops-chart-grid">
             <section className="ops-panel">
               <h3>
-                {metrics.responseMode === 'scene'
-                  ? 'Time to scene (recent incidents)'
-                  : metrics.responseMode === 'dispatch'
-                    ? 'Time to dispatch (recent incidents)'
-                    : 'Response times (recent incidents)'}
+                {historicalResponse.mode === 'scene'
+                  ? 'Time to scene (historical)'
+                  : historicalResponse.mode === 'dispatch'
+                    ? 'Time to dispatch (historical)'
+                    : 'Response times (historical)'}
               </h3>
               {responseTrendData.length < 2 ? (
                 <p className="ops-placeholder">Not enough data yet</p>
               ) : (
                 <div className="ops-chart-tall">
+                  <p className="ops-historical-note">Based on all historical data</p>
                   <ResponsiveContainer width="100%" height={300}>
                     <ComposedChart data={responseTrendData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
@@ -813,10 +821,11 @@ export function AnalyticsPage({ token, onError }: { token: string; onError: (msg
 
             <section className="ops-panel">
               <h3>Dangerous Stretches</h3>
-              {!incidents.some((i) => i.km_marker != null) ? (
+              {!incidentsHistorical.some((i) => i.km_marker != null) ? (
                 <p className="ops-placeholder">Not enough data yet</p>
               ) : (
                 <div className="ops-chart-tall">
+                  <p className="ops-historical-note">Based on all historical data</p>
                   <ResponsiveContainer width="100%" height={360}>
                     <BarChart layout="vertical" data={stretchData} margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#334155" horizontal={false} />

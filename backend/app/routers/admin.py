@@ -126,6 +126,51 @@ def _analytics_incident_rows(db: Session, start: datetime, end: datetime) -> lis
     return out
 
 
+_HISTORICAL_INCIDENTS_CAP = 8000
+
+
+def _analytics_incident_rows_historical(db: Session, end: datetime, limit: int = _HISTORICAL_INCIDENTS_CAP) -> list[AnalyticsIncidentRowOut]:
+    """Recent incidents up to `end`, newest first in query then returned chronological (for charts)."""
+    rows = db.execute(
+        text(
+            """
+            SELECT i.id, i.incident_type, i.severity, i.status, i.created_at, i.km_marker, i.lat, i.lng,
+              (SELECT EXTRACT(EPOCH FROM (MIN(d.created_at) - i.created_at)) / 60.0
+               FROM dispatches d WHERE d.incident_id = i.id) AS resp_min,
+              (SELECT EXTRACT(EPOCH FROM (MIN(ie.created_at) - i.created_at)) / 60.0
+               FROM incident_events ie
+               WHERE ie.incident_id = i.id
+                 AND ie.event_type = 'status_change'
+                 AND LOWER(COALESCE(ie.payload->>'status', '')) = 'on_scene') AS scene_min
+            FROM incidents i
+            WHERE i.created_at < :end
+            ORDER BY i.created_at DESC
+            LIMIT :limit
+            """
+        ),
+        {"end": end, "limit": limit},
+    ).fetchall()
+    out: list[AnalyticsIncidentRowOut] = []
+    for rid, itype, sev, st, created, km, la, ln, resp, scene in reversed(rows):
+        rm = round(float(resp), 2) if resp is not None else None
+        sm = round(float(scene), 2) if scene is not None else None
+        out.append(
+            AnalyticsIncidentRowOut(
+                id=rid,
+                incident_type=itype,
+                severity=sev,
+                status=st,
+                created_at=created,
+                km_marker=float(km) if km is not None else None,
+                latitude=float(la) if la is not None else None,
+                longitude=float(ln) if ln is not None else None,
+                first_response_minutes=rm,
+                time_to_scene_minutes=sm,
+            )
+        )
+    return out
+
+
 def _fleet_breakdown(db: Session) -> AdminAnalyticsFleetOut:
     rows = db.execute(select(Vehicle.status)).scalars().all()
     avail = disp = off = 0
@@ -722,6 +767,7 @@ def admin_analytics(
 
     incidents = _analytics_incident_rows(db, start, end)
     incidents_previous = _analytics_incident_rows(db, prev_start, prev_end)
+    incidents_historical = _analytics_incident_rows_historical(db, now)
     fleet = _fleet_breakdown(db)
     coverage = _coverage_stats(db)
     vehicle_performance = _vehicle_performance_for_period(db, start, end)
@@ -731,6 +777,7 @@ def admin_analytics(
         comparison_label=comparison_label,
         incidents=incidents,
         incidents_previous=incidents_previous,
+        incidents_historical=incidents_historical,
         fleet=fleet,
         coverage=coverage,
         vehicle_performance=vehicle_performance,

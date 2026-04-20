@@ -484,6 +484,10 @@ class AdminAnalyticsOut(BaseModel):
     comparison_label: str
     incidents: list[AnalyticsIncidentRowOut]
     incidents_previous: list[AnalyticsIncidentRowOut]
+    incidents_historical: list[AnalyticsIncidentRowOut] = Field(
+        default_factory=list,
+        description="Recent incidents across all time (capped) for stretch/response charts.",
+    )
     fleet: AdminAnalyticsFleetOut
     coverage: AdminAnalyticsCoverageOut
     vehicle_performance: list[AdminAnalyticsVehiclePerformanceOut]

@@ -3,13 +3,7 @@ import L from 'leaflet'
 import markerIcon from 'leaflet/dist/images/marker-icon.png'
 import markerShadow from 'leaflet/dist/images/marker-shadow.png'
 import 'leaflet/dist/leaflet.css'
-import {
-  locationStackKey,
-  nh48LeafletLatLngs,
-  resolveIncidentMapPosition,
-  resolveVehicleMapPosition,
-  stackOffsetLayerPixels,
-} from './nh48Route'
+import { nh48LeafletLatLngs, resolveIncidentMapPosition, resolveVehicleMapPosition } from './nh48Route'
 
 const DefaultIcon = L.icon({
   iconUrl: markerIcon,
@@ -18,6 +12,21 @@ const DefaultIcon = L.icon({
   iconAnchor: [12, 41],
 })
 L.Marker.prototype.options.icon = DefaultIcon
+
+function escHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function ufFind(parent: number[], i: number): number {
+  if (parent[i] !== i) parent[i] = ufFind(parent, parent[i])
+  return parent[i]
+}
+
+function ufUnion(parent: number[], i: number, j: number): void {
+  const ri = ufFind(parent, i)
+  const rj = ufFind(parent, j)
+  if (ri !== rj) parent[rj] = ri
+}
 
 export type Nh48LiveMapIncident = {
   id: string
@@ -76,7 +85,8 @@ function vehicleMarkerHtml(color: string): string {
 }
 
 /**
- * Shared NH48 Leaflet map: blue road polyline, snapped incidents, snapped/km ambulances, 10px stack offset when overlapping.
+ * Shared NH48 Leaflet map: blue road polyline, snapped incidents/vehicles;
+ * markers within 5px cluster — pairs offset horizontally; 3+ shown as count badge.
  */
 export function Nh48OpsLiveMap({
   liveMap,
@@ -141,57 +151,147 @@ export function Nh48OpsLiveMap({
         prepared.push({ kind: 'veh', v, ll: L.latLng(pos.lat, pos.lng) })
       }
     }
-    const groups = new Map<string, Prepared[]>()
-    for (const p of prepared) {
-      const k = locationStackKey(p.ll.lat, p.ll.lng)
-      if (!groups.has(k)) groups.set(k, [])
-      groups.get(k)!.push(p)
+
+    const n = prepared.length
+    const pts = prepared.map((p) => map.latLngToLayerPoint(p.ll))
+    const parent = Array.from({ length: n }, (_, i) => i)
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        if (pts[i].distanceTo(pts[j]) <= 5) ufUnion(parent, i, j)
+      }
+    }
+    const byRoot = new Map<number, number[]>()
+    for (let i = 0; i < n; i++) {
+      const r = ufFind(parent, i)
+      if (!byRoot.has(r)) byRoot.set(r, [])
+      byRoot.get(r)!.push(i)
+    }
+    const clusters = [...byRoot.values()]
+
+    const sortKeyForIndex = (idx: number): string => {
+      const p = prepared[idx]
+      if (p.kind === 'inc') return `0-${p.inc.id}`
+      return `1-${p.v.id}`
     }
 
-    const offsetLatLngForStack = (ll: L.LatLng, idx: number, n: number) => {
-      const { dx, dy } = stackOffsetLayerPixels(idx, n)
-      const pt = map.latLngToLayerPoint(ll)
-      return map.layerPointToLatLng(L.point(pt.x + dx, pt.y + dy))
-    }
-
-    for (const arr of groups.values()) {
-      arr.forEach((p, idx) => {
-        const at = offsetLatLngForStack(p.ll, idx, arr.length)
-        if (p.kind === 'inc') {
-          const inc = p.inc
-          const icon = L.divIcon({
-            className: 'ops-leaflet-divicon',
-            html: incidentMarkerHtml(inc.severity),
-            iconSize: [20, 20],
-            iconAnchor: [10, 10],
-          })
-          const m = L.marker(at, { icon })
-          m.bindPopup(
-            `<div class="ops-popup"><strong>${inc.incident_type.replace(/_/g, ' ')}</strong><br/>` +
-              `${inc.severity} · ${inc.status}<br/>` +
-              `KM: ${inc.km_marker != null ? inc.km_marker : '—'}<br/>` +
-              `${new Date(inc.created_at).toLocaleString()}</div>`,
-          )
-          m.addTo(layer)
-        } else {
-          const v = p.v
-          const col = vehicleStatusColor(v.status)
-          const icon = L.divIcon({
-            className: 'ops-leaflet-divicon',
-            html: vehicleMarkerHtml(col),
-            iconSize: [18, 18],
-            iconAnchor: [9, 9],
-          })
-          const mk = L.marker(at, { icon })
-          mk.bindPopup(
-            `<div class="ops-popup"><strong>${v.label}</strong><br/>` +
-              `${v.status}${v.driver_name ? `<br/>Driver: ${v.driver_name}` : ''}` +
-              `${v.assigned_incident_type ? `<br/>Assignment: ${v.assigned_incident_type}` : ''}</div>`,
-          )
-          mk.addTo(layer)
-          vehMarkersRef.current.set(v.id, mk)
+    for (const idxs of clusters) {
+      if (idxs.length >= 3) {
+        let sx = 0
+        let sy = 0
+        for (const i of idxs) {
+          sx += pts[i].x
+          sy += pts[i].y
         }
-      })
+        const at = map.layerPointToLatLng(L.point(sx / idxs.length, sy / idxs.length))
+        const lines = idxs
+          .map((i) => prepared[i])
+          .map((p) => {
+            if (p.kind === 'inc') {
+              const inc = p.inc
+              return `<strong>${escHtml(inc.incident_type.replace(/_/g, ' '))}</strong> · ${escHtml(inc.severity)} · ${escHtml(inc.status)} · KM ${inc.km_marker != null ? inc.km_marker : '—'}`
+            }
+            const v = p.v
+            return `<strong>${escHtml(v.label)}</strong> · ${escHtml(v.status)}${v.driver_name ? ` · ${escHtml(v.driver_name)}` : ''}`
+          })
+          .join('<br/><br/>')
+        const icon = L.divIcon({
+          className: 'ops-leaflet-divicon',
+          html: `<span class="ops-map-cluster-badge">${idxs.length}</span>`,
+          iconSize: [28, 28],
+          iconAnchor: [14, 14],
+        })
+        const mk = L.marker(at, { icon })
+        mk.bindPopup(`<div class="ops-popup">${lines}</div>`)
+        mk.addTo(layer)
+        for (const i of idxs) {
+          const p = prepared[i]
+          if (p.kind === 'veh') vehMarkersRef.current.set(p.v.id, mk)
+        }
+        continue
+      }
+
+      if (idxs.length === 2) {
+        const sorted = [...idxs].sort((a, b) => sortKeyForIndex(a).localeCompare(sortKeyForIndex(b)))
+        sorted.forEach((pi, k) => {
+          const p = prepared[pi]
+          const base = pts[pi]
+          const dx = k === 0 ? 0 : 15
+          const at = map.layerPointToLatLng(L.point(base.x + dx, base.y))
+          if (p.kind === 'inc') {
+            const inc = p.inc
+            const icon = L.divIcon({
+              className: 'ops-leaflet-divicon',
+              html: incidentMarkerHtml(inc.severity),
+              iconSize: [20, 20],
+              iconAnchor: [10, 10],
+            })
+            const m = L.marker(at, { icon })
+            m.bindPopup(
+              `<div class="ops-popup"><strong>${escHtml(inc.incident_type.replace(/_/g, ' '))}</strong><br/>` +
+                `${escHtml(inc.severity)} · ${escHtml(inc.status)}<br/>` +
+                `KM: ${inc.km_marker != null ? inc.km_marker : '—'}<br/>` +
+                `${new Date(inc.created_at).toLocaleString()}</div>`,
+            )
+            m.addTo(layer)
+          } else {
+            const v = p.v
+            const col = vehicleStatusColor(v.status)
+            const icon = L.divIcon({
+              className: 'ops-leaflet-divicon',
+              html: vehicleMarkerHtml(col),
+              iconSize: [18, 18],
+              iconAnchor: [9, 9],
+            })
+            const mk = L.marker(at, { icon })
+            mk.bindPopup(
+              `<div class="ops-popup"><strong>${escHtml(v.label)}</strong><br/>` +
+                `${escHtml(v.status)}${v.driver_name ? `<br/>Driver: ${escHtml(v.driver_name)}` : ''}` +
+                `${v.assigned_incident_type ? `<br/>Assignment: ${escHtml(v.assigned_incident_type)}` : ''}</div>`,
+            )
+            mk.addTo(layer)
+            vehMarkersRef.current.set(v.id, mk)
+          }
+        })
+        continue
+      }
+
+      const i = idxs[0]
+      const p = prepared[i]
+      const at = p.ll
+      if (p.kind === 'inc') {
+        const inc = p.inc
+        const icon = L.divIcon({
+          className: 'ops-leaflet-divicon',
+          html: incidentMarkerHtml(inc.severity),
+          iconSize: [20, 20],
+          iconAnchor: [10, 10],
+        })
+        const m = L.marker(at, { icon })
+        m.bindPopup(
+          `<div class="ops-popup"><strong>${escHtml(inc.incident_type.replace(/_/g, ' '))}</strong><br/>` +
+            `${escHtml(inc.severity)} · ${escHtml(inc.status)}<br/>` +
+            `KM: ${inc.km_marker != null ? inc.km_marker : '—'}<br/>` +
+            `${new Date(inc.created_at).toLocaleString()}</div>`,
+        )
+        m.addTo(layer)
+      } else {
+        const v = p.v
+        const col = vehicleStatusColor(v.status)
+        const icon = L.divIcon({
+          className: 'ops-leaflet-divicon',
+          html: vehicleMarkerHtml(col),
+          iconSize: [18, 18],
+          iconAnchor: [9, 9],
+        })
+        const mk = L.marker(at, { icon })
+        mk.bindPopup(
+          `<div class="ops-popup"><strong>${escHtml(v.label)}</strong><br/>` +
+            `${escHtml(v.status)}${v.driver_name ? `<br/>Driver: ${escHtml(v.driver_name)}` : ''}` +
+            `${v.assigned_incident_type ? `<br/>Assignment: ${escHtml(v.assigned_incident_type)}` : ''}</div>`,
+        )
+        mk.addTo(layer)
+        vehMarkersRef.current.set(v.id, mk)
+      }
     }
 
     const hid = highlightVehicleId ?? null
