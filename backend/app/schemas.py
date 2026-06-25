@@ -303,6 +303,23 @@ class AuditLogEntryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DispatchActivityLineOut(BaseModel):
+    """Pre-formatted line for dispatch console activity log."""
+
+    id: uuid.UUID
+    timestamp: datetime
+    line: str
+
+
+class DispatchAutoEventOut(BaseModel):
+    """Auto-dispatch audit rows for polling (corridor-scoped)."""
+
+    id: uuid.UUID
+    timestamp: datetime
+    message: str
+    corridor_id: uuid.UUID | None = None
+
+
 class ApiRequestLogOut(BaseModel):
     id: uuid.UUID
     timestamp: datetime

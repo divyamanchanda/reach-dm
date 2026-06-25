@@ -179,7 +179,12 @@ async def start_background_maintenance() -> None:
                     await emit_to_corridor(
                         "operator_alert",
                         cid,
-                        {"message": msg, "kind": "auto_dispatch"},
+                        {
+                            "message": msg,
+                            "kind": "auto_dispatch",
+                            "incident_id": str(iid),
+                            "vehicle_id": str(vid),
+                        },
                     )
                     await emit_to_corridor(
                         "incident:dispatched",

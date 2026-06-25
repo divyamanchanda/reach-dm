@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.geo_utils import incident_lat_lng
-from app.models import Incident, IncidentEvent, User
+from app.models import AuditLog, Incident, IncidentEvent, User, Vehicle
 from app.schemas import (
+    DispatchActivityLineOut,
+    DispatchAutoEventOut,
     DispatchBody,
     IncidentDetailOut,
     IncidentPatchBody,
@@ -78,6 +81,101 @@ async def _push_recalled(corridor_id: uuid.UUID, payload: dict) -> None:
 
 async def _push_corridor_stats(corridor_id: uuid.UUID) -> None:
     await emit_to_corridor("corridor:stats", corridor_id, {"corridor_id": str(corridor_id)})
+
+
+_DISPATCH_FEED_ACTIONS = frozenset({"auto_dispatched", "incident_dispatched", "incident_closed"})
+
+
+def _format_dispatch_activity_line(db: Session, row: AuditLog) -> str:
+    d: dict = row.details if isinstance(row.details, dict) else {}
+    t = row.timestamp.strftime("%H:%M")
+    if row.action == "auto_dispatched":
+        msg = (d.get("message") or "").strip()
+        base = msg if msg else "Auto-dispatch"
+        return f"{t} — {base} — no operator action detected"
+    if row.action == "incident_dispatched":
+        name = (row.user_name or "").strip() or "Operator"
+        vid_raw = d.get("vehicle_id")
+        label = "Ambulance"
+        if vid_raw:
+            try:
+                v = db.get(Vehicle, uuid.UUID(str(vid_raw)))
+                if v and v.label:
+                    label = str(v.label)
+            except (ValueError, TypeError):
+                pass
+        km_s = "—"
+        if row.entity_id:
+            inc = db.get(Incident, row.entity_id)
+            if inc is not None and inc.km_marker is not None:
+                km_s = f"{float(inc.km_marker):.0f}"
+        extra = " (reassign)" if d.get("reassign") else ""
+        return f"{t} — {label} dispatched to KM {km_s} by {name}{extra}"
+    if row.action == "incident_closed":
+        name = (row.user_name or "").strip() or "Operator"
+        st = d.get("status", "closed")
+        return f"{t} — Incident marked {st} by {name}"
+    return f"{t} — {row.action}"
+
+
+@router.get("/dispatch-activity", response_model=list[DispatchActivityLineOut])
+def dispatch_activity_feed(
+    corridor_id: uuid.UUID = Query(..., description="Corridor to scope activity"),
+    limit: int = Query(10, ge=1, le=30),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("dispatch_operator")),
+):
+    q = (
+        select(AuditLog)
+        .join(Incident, AuditLog.entity_id == Incident.id)
+        .where(Incident.corridor_id == corridor_id)
+        .where(AuditLog.entity_type == "incident")
+        .where(AuditLog.action.in_(_DISPATCH_FEED_ACTIONS))
+        .order_by(AuditLog.timestamp.desc())
+        .limit(limit)
+    )
+    rows = list(db.execute(q).scalars().all())
+    rows.reverse()
+    return [
+        DispatchActivityLineOut(
+            id=r.id,
+            timestamp=r.timestamp,
+            line=_format_dispatch_activity_line(db, r),
+        )
+        for r in rows
+    ]
+
+
+@router.get("/auto-dispatch-events", response_model=list[DispatchAutoEventOut])
+def list_auto_dispatch_events(
+    corridor_id: uuid.UUID = Query(...),
+    since: datetime | None = Query(None, description="Return rows with timestamp strictly after this (UTC)"),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_role("dispatch_operator")),
+):
+    q = (
+        select(AuditLog)
+        .join(Incident, AuditLog.entity_id == Incident.id)
+        .where(Incident.corridor_id == corridor_id)
+        .where(AuditLog.action == "auto_dispatched")
+    )
+    if since is not None:
+        q = q.where(AuditLog.timestamp > since)
+    q = q.order_by(AuditLog.timestamp.asc())
+    rows = db.execute(q).scalars().all()
+    out: list[DispatchAutoEventOut] = []
+    for r in rows:
+        d = r.details if isinstance(r.details, dict) else {}
+        msg = (d.get("message") or "Auto-dispatch").strip()
+        cid = None
+        cr = d.get("corridor_id")
+        if cr:
+            try:
+                cid = uuid.UUID(str(cr))
+            except (ValueError, TypeError):
+                cid = None
+        out.append(DispatchAutoEventOut(id=r.id, timestamp=r.timestamp, message=msg, corridor_id=cid))
+    return out
 
 
 @router.get("/{incident_id}", response_model=IncidentDetailOut)
