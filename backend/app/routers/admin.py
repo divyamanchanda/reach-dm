@@ -470,6 +470,88 @@ def admin_vehicles_dashboard(
     return out
 
 
+# NOTE (A1 fix): this route MUST be declared before
+# GET /incidents/{incident_id} below. FastAPI matches routes in the order
+# they are registered, so if the dynamic {incident_id} route came first it
+# would greedily match "export" as an incident_id and fail with a 422
+# (invalid UUID) before this handler is ever reached.
+@router.get("/incidents/export")
+def export_incidents_csv(
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_user),
+    limit: int = Query(100, ge=1, le=500),
+):
+    rows = db.execute(
+        text(
+            """
+            SELECT
+              i.public_report_id,
+              i.incident_type,
+              i.severity,
+              i.km_marker,
+              i.status,
+              i.trust_score,
+              i.created_at,
+              fd.dispatched_at,
+              v.label,
+              EXTRACT(EPOCH FROM (fd.dispatched_at - i.created_at)) / 60.0 AS resp_min
+            FROM incidents i
+            LEFT JOIN LATERAL (
+              SELECT d.created_at AS dispatched_at, d.vehicle_id
+              FROM dispatches d
+              WHERE d.incident_id = i.id
+              ORDER BY d.created_at ASC
+              LIMIT 1
+            ) fd ON true
+            LEFT JOIN vehicles v ON v.id = fd.vehicle_id
+            ORDER BY i.created_at DESC
+            LIMIT :lim
+            """
+        ),
+        {"lim": limit},
+    ).fetchall()
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(
+        [
+            "Report ID",
+            "Type",
+            "Severity",
+            "KM",
+            "Status",
+            "Trust Score",
+            "Reported At",
+            "Dispatched At",
+            "Vehicle Assigned",
+            "Response Time Minutes",
+        ]
+    )
+    for row in rows:
+        pr, it, sev, km, st, trust, created, disp_at, vlabel, resp_min = row
+        w.writerow(
+            [
+                pr or "",
+                it,
+                sev,
+                f"{float(km):.1f}" if km is not None else "",
+                st,
+                trust,
+                created.isoformat() if created else "",
+                disp_at.isoformat() if disp_at else "",
+                vlabel or "",
+                f"{float(resp_min):.2f}" if resp_min is not None else "",
+            ]
+        )
+
+    data = buf.getvalue()
+    return Response(
+        content=data.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="reach_incidents_export.csv"'},
+    )
+
+
 @router.get("/incidents/{incident_id}", response_model=AdminIncidentDetailOut)
 def admin_incident_detail(
     incident_id: uuid.UUID,
@@ -813,83 +895,6 @@ async def admin_broadcast(
         }
     )
     return {"ok": True, "id": str(row.id)}
-
-
-@router.get("/incidents/export")
-def export_incidents_csv(
-    db: Session = Depends(get_db),
-    _: User = Depends(admin_user),
-    limit: int = Query(100, ge=1, le=500),
-):
-    rows = db.execute(
-        text(
-            """
-            SELECT
-              i.public_report_id,
-              i.incident_type,
-              i.severity,
-              i.km_marker,
-              i.status,
-              i.trust_score,
-              i.created_at,
-              fd.dispatched_at,
-              v.label,
-              EXTRACT(EPOCH FROM (fd.dispatched_at - i.created_at)) / 60.0 AS resp_min
-            FROM incidents i
-            LEFT JOIN LATERAL (
-              SELECT d.created_at AS dispatched_at, d.vehicle_id
-              FROM dispatches d
-              WHERE d.incident_id = i.id
-              ORDER BY d.created_at ASC
-              LIMIT 1
-            ) fd ON true
-            LEFT JOIN vehicles v ON v.id = fd.vehicle_id
-            ORDER BY i.created_at DESC
-            LIMIT :lim
-            """
-        ),
-        {"lim": limit},
-    ).fetchall()
-
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(
-        [
-            "Report ID",
-            "Type",
-            "Severity",
-            "KM",
-            "Status",
-            "Trust Score",
-            "Reported At",
-            "Dispatched At",
-            "Vehicle Assigned",
-            "Response Time Minutes",
-        ]
-    )
-    for row in rows:
-        pr, it, sev, km, st, trust, created, disp_at, vlabel, resp_min = row
-        w.writerow(
-            [
-                pr or "",
-                it,
-                sev,
-                f"{float(km):.1f}" if km is not None else "",
-                st,
-                trust,
-                created.isoformat() if created else "",
-                disp_at.isoformat() if disp_at else "",
-                vlabel or "",
-                f"{float(resp_min):.2f}" if resp_min is not None else "",
-            ]
-        )
-
-    data = buf.getvalue()
-    return Response(
-        content=data.encode("utf-8"),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="reach_incidents_export.csv"'},
-    )
 
 
 @router.get("/speed-zones", response_model=list[SpeedZoneOut])
