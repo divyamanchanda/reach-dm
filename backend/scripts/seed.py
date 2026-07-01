@@ -1,6 +1,7 @@
 """
 Load dummy REACH data into PostgreSQL.
-Run:  cd backend && python -m scripts.seed
+Run:  cd backend && REACH_SEED_CONFIRM=yes python -m scripts.seed
+  or: cd backend && python -m scripts.seed --force
 
 Requires DB from docker-compose (or equivalent) and schema from infra/init-db.sql.
 """
@@ -257,6 +258,20 @@ def clear_and_seed(db: Session) -> None:
 
 
 def main() -> None:
+    import os
+    import sys
+
+    confirmed = os.environ.get("REACH_SEED_CONFIRM", "").lower() == "yes"
+    force = "--force" in sys.argv
+
+    if not confirmed and not force:
+        print(
+            "Refusing to seed: this TRUNCATES all demo tables.\n"
+            "Re-run with:  REACH_SEED_CONFIRM=yes python -m scripts.seed\n"
+            "Or:           python -m scripts.seed --force"
+        )
+        sys.exit(1)
+
     with SessionLocal() as db:
         clear_and_seed(db)
 
